@@ -21,6 +21,18 @@ class OrderBookSide {
         OrderBookSide(OrderBookSide&&) noexcept = default;
         OrderBookSide& operator=(OrderBookSide&&) noexcept = default;
 
+        OrderSide getSide() const {
+            return side;
+        }
+
+        auto getLevels() const {
+            std::vector<std::shared_ptr<BookLevel>> levels;
+            for (const auto& [price, level] : priceLevels) {
+                levels.push_back(level);
+            }
+            return levels;
+        }
+
         bool isOrderIdExist(int orderId) const {
             return orderIdMap.find(orderId) != orderIdMap.end();
         }
