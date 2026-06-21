@@ -1,13 +1,26 @@
 # bench/CMakeLists.txt
-# Each benchmark is its own executable.
- 
-# Example — uncomment when you add your first benchmark:
-# add_executable(bench_order_book bench_order_book.cpp)
-# target_link_libraries(bench_order_book PRIVATE
-#     me_core
-#     benchmark::benchmark_main
-#     project_options
-# )
- 
-# Placeholder so the directory builds before you add real benchmarks:
-add_custom_target(bench_placeholder)
+# One executable per operation (mirrors tests/CMakeLists.txt's one-exe-per-file convention).
+# Each links Google Benchmark's benchmark_main (provides main()) and project_options for the
+# Release perf flags. project_warnings is intentionally omitted: the strict warning set
+# (-Wconversion, -Wold-style-cast, ...) trips on the benchmark glue/headers.
+
+function(add_bench name)
+    add_executable(${name} ${name}.cpp)
+    target_link_libraries(${name} PRIVATE
+        me_core
+        benchmark::benchmark_main
+        project_options
+    )
+endfunction()
+
+add_bench(bench_add)
+add_bench(bench_modify)
+add_bench(bench_cancel)
+
+# Per-operation latency harness (P50/P99/P99.9). Standalone — it has its own main(),
+# so it does NOT link benchmark_main; it only needs the core library.
+add_executable(bench_latency bench_latency.cpp)
+target_link_libraries(bench_latency PRIVATE
+    me_core
+    project_options
+)
