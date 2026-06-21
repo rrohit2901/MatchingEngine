@@ -57,3 +57,10 @@ bool OrderBook::modifyOrder(int orderId, int newQuantity, double newPrice, Order
     sellLevels.cancelOrder(orderId);
     return buyLevels.addOrder(orderId, type, newPriceInt, newQuantity) != nullptr;
 }
+
+Order OrderBook::getOrder(int orderId) const {
+    if (buyLevels.isOrderIdExist(orderId)) {
+        return buyLevels.getOrder(orderId);
+    }
+    return sellLevels.getOrder(orderId);
+}

@@ -28,3 +28,12 @@ target_link_libraries(test_order_book_side PRIVATE
     project_options
 )
 add_test(NAME order_book_side_tests COMMAND test_order_book_side)
+
+add_executable(test_order_book test_order_book.cpp)
+target_link_libraries(test_order_book PRIVATE
+    me_core
+    GTest::gtest_main
+    project_warnings
+    project_options
+)
+add_test(NAME order_book_tests COMMAND test_order_book)

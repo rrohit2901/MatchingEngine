@@ -35,6 +35,28 @@ TEST (OrderBookSide, AddOrder) {
     EXPECT_EQ(order2->getQuantity(), 100);
 }
 
+TEST (OrderBookSide, AddMarketOrder) {
+    OrderBookSide<OrderSide::BUY> orderBookSideBuy{};
+    auto order = orderBookSideBuy.addOrder(1, OrderType::MARKET, 0, 100);
+    EXPECT_TRUE(orderBookSideBuy.isOrderIdExist(1));
+    EXPECT_EQ(orderBookSideBuy.getLevels().size(), 1);
+    EXPECT_EQ(order->getOrderId(), 1);
+    EXPECT_EQ(order->getSide(), OrderSide::BUY);
+    EXPECT_EQ(order->getType(), OrderType::MARKET);
+    EXPECT_EQ(order->getPrice(), std::numeric_limits<int>::max());
+    EXPECT_EQ(order->getQuantity(), 100);
+
+    OrderBookSide<OrderSide::SELL> orderBookSideSell{};
+    auto order2 = orderBookSideSell.addOrder(2, OrderType::MARKET, 0, 100);
+    EXPECT_TRUE(orderBookSideSell.isOrderIdExist(2));
+    EXPECT_EQ(orderBookSideSell.getLevels().size(), 1);
+    EXPECT_EQ(order2->getOrderId(), 2);
+    EXPECT_EQ(order2->getSide(), OrderSide::SELL);
+    EXPECT_EQ(order2->getType(), OrderType::MARKET);
+    EXPECT_EQ(order2->getPrice(), std::numeric_limits<int>::min());
+    EXPECT_EQ(order2->getQuantity(), 100);
+}
+
 TEST (OrderBookSide, CancelOrder) {
     OrderBookSide<OrderSide::BUY> orderBookSideBuy{};
     auto order = orderBookSideBuy.addOrder(1, OrderType::LIMIT, 1, 100);

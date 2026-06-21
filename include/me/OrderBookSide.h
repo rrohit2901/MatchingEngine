@@ -6,13 +6,34 @@
 #include <map>
 #include <unordered_map>
 #include <type_traits>
+#include <limits>
 
 template<OrderSide side>
 class OrderBookSide {
     private:
+        int marketPrice = (side == OrderSide::BUY) ? std::numeric_limits<int>::max() : std::numeric_limits<int>::min();
         using Comparator = std::conditional_t<side == OrderSide::BUY, std::greater<int>, std::less<int>>;
         std::map<int, std::shared_ptr<BookLevel>, Comparator> priceLevels; 
         std::unordered_map<int, std::pair<std::shared_ptr<BookLevel>, std::shared_ptr<Order>>> orderIdMap;
+
+        std::shared_ptr<Order> addLimitOrder(int orderId, int price, int quantity) {
+            if(priceLevels.find(price) == priceLevels.end()) {
+                priceLevels[price] = std::make_shared<BookLevel>(price);
+            }
+            auto order = priceLevels[price]->addOrder(orderId, side, OrderType::LIMIT, price, quantity);
+            orderIdMap[orderId] = {priceLevels[price], order};
+            return order;
+        }
+
+        std::shared_ptr<Order> addMarketOrder(int orderId, int quantity) {
+            int price = marketPrice;
+            if(priceLevels.find(price) == priceLevels.end()) {
+                priceLevels[price] = std::make_shared<BookLevel>(price);
+            }
+            auto order = priceLevels[price]->addOrder(orderId, side, OrderType::MARKET, price, quantity);
+            orderIdMap[orderId] = {priceLevels[price], order};
+            return order;
+        }
     public:
         OrderBookSide() {};
         ~OrderBookSide() = default;
@@ -56,12 +77,12 @@ class OrderBookSide {
         }
 
         std::shared_ptr<Order> addOrder(int orderId, OrderType type, int price, int quantity) {
-            if(priceLevels.find(price) == priceLevels.end()) {
-                priceLevels[price] = std::make_shared<BookLevel>(price);
+            if (type == OrderType::LIMIT) {
+                return addLimitOrder(orderId, price, quantity);
+            } else if (type == OrderType::MARKET) {
+                return addMarketOrder(orderId, quantity);
             }
-            auto order = priceLevels[price]->addOrder(orderId, side, type, price, quantity);
-            orderIdMap[orderId] = {priceLevels[price], order};
-            return order;
+            return nullptr;
         }
 
         bool cancelOrder(int orderId) {
@@ -103,5 +124,12 @@ class OrderBookSide {
             }
             
             return modifiedOrder;
+        }
+
+        Order getOrder(int orderId) const {
+            if (orderIdMap.find(orderId) == orderIdMap.end()) {
+                throw std::runtime_error("Order ID does not exist");
+            }
+            return *(orderIdMap.at(orderId).second);
         }
 };
