@@ -1,7 +1,7 @@
 #include "Order.h"
 
 Order::Order(int orderId, OrderSide side, OrderType type, int price, int quantity) 
-    : orderId(orderId), side(side), type(type), price(price), quantity(quantity), isValid(true) {}
+    : orderId(orderId), side(side), type(type), price(price), quantity(quantity), isCancelled(false), isFulfilled(false) {}
 
 Order::~Order() = default;
 Order::Order(const Order& other)= default;
@@ -13,10 +13,13 @@ Order::Order(Order&& other) noexcept {
     type = other.type;
     price = other.price;
     quantity = other.quantity;
-    isValid = other.isValid;
+    isCancelled = other.isCancelled;
+    isFulfilled = other.isFulfilled;
 
-    other.isValid = false; 
+    other.isCancelled = true; 
+    other.isFulfilled = false;
 }
+
 Order& Order::operator=(Order&& other) noexcept {
     if (this != &other) {
         orderId = other.orderId;
@@ -24,9 +27,11 @@ Order& Order::operator=(Order&& other) noexcept {
         type = other.type;
         price = other.price;
         quantity = other.quantity;
-        isValid = other.isValid;
+        isCancelled = other.isCancelled;
+        isFulfilled = other.isFulfilled;
 
-        other.isValid = false; 
+        other.isCancelled = true; 
+        other.isFulfilled = false;
     }
     return *this;
 }
@@ -52,19 +57,32 @@ int Order::getOrderId() const {
 }
 
 bool Order::valid() const {
-    return isValid;
+    return !(isCancelled || isFulfilled);
 }
 
 bool Order::cancel() {
-    if (!isValid) {
+    if (!valid()) {
         return false;
     }
-    isValid = false;
+    isCancelled = true;
     return true;
 }
 
+int Order::fulfill(int qty) {
+    if (!valid()) {
+        return qty;
+    }
+    if(qty>=quantity) {
+        qty -= quantity;
+        isFulfilled = true;
+        return qty;
+    }
+    quantity -= qty;
+    return 0;
+}
+
 bool Order::modify(int newQuantity, int newPrice) {
-    if (!isValid) {
+    if (!valid()) {
         return false;
     }
     quantity = newQuantity;

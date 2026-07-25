@@ -69,7 +69,7 @@ FetchContent_MakeAvailable(googletest benchmark)
 # -----------------------------------------------------------------------------
 # Core library
 # -----------------------------------------------------------------------------
-add_library(me_core src/BookLevel.cpp src/OrderBook.cpp src/Order.cpp)
+add_library(me_core src/BookLevel.cpp src/OrderBook.cpp src/Order.cpp src/Matcher.cpp src/MatchingEngine.cpp)
 target_include_directories(me_core PUBLIC include/me)
 target_link_libraries(me_core PRIVATE project_warnings project_options)
  
@@ -82,6 +82,14 @@ set_target_properties(me_core PROPERTIES LINKER_LANGUAGE CXX)
 add_executable(me_main src/main.cpp)
 target_link_libraries(me_main PRIVATE me_core project_warnings project_options)
  
+# -----------------------------------------------------------------------------
+# Lock-based data structures (practice) — compile-check only
+# Forces instantiation of the LockQueue template so build surfaces its errors.
+# -----------------------------------------------------------------------------
+add_library(me_ds_lock STATIC me_ds_lock/lock_queue_compile_check.cpp)
+target_include_directories(me_ds_lock PUBLIC me_ds_lock)
+target_link_libraries(me_ds_lock PRIVATE project_warnings project_options)
+
 # -----------------------------------------------------------------------------
 # Tests
 # -----------------------------------------------------------------------------

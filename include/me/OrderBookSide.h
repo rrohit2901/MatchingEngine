@@ -126,10 +126,43 @@ class OrderBookSide {
             return modifiedOrder;
         }
 
-        Order getOrder(int orderId) const {
+        std::shared_ptr<Order> getOrder(int orderId) const {
             if (orderIdMap.find(orderId) == orderIdMap.end()) {
-                throw std::runtime_error("Order ID does not exist");
+                return std::shared_ptr<Order>();
             }
-            return *(orderIdMap.at(orderId).second);
+            return orderIdMap.at(orderId).second;
+        }
+
+        std::vector<std::shared_ptr<BookLevel>> getCandidateLevels (int curr_price) {
+            std::vector<std::shared_ptr<BookLevel>> candidateLevels;
+            for(auto& [price, bookLevel]: priceLevels) {
+                if(side==OrderSide::BUY && curr_price <= price) {
+                    candidateLevels.push_back(bookLevel);
+                }
+                else if(side==OrderSide::SELL && curr_price>=price) {
+                    candidateLevels.push_back(bookLevel);
+                }
+            }
+            return candidateLevels;
+        }
+
+        int fillOrders(int target_price, int qty) {
+            for (auto it = priceLevels.begin(); it != priceLevels.end(); ) {
+                const auto& [price, bookLevel] = *it;
+                bool is_valid = (side==OrderSide::BUY && target_price<=price) || (side==OrderSide::SELL && target_price>=price);
+                if(is_valid && qty){
+                    qty = bookLevel->fillOrders(qty);
+                    if(bookLevel->getTotalQuantity()==0) {
+                        for(const std::shared_ptr<Order>& order: bookLevel->getAllOrders()) {
+                            orderIdMap.erase(order->getOrderId());
+                        }
+                        it = priceLevels.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                else break;
+            }
+            return qty;
         }
 };

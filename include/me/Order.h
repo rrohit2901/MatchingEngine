@@ -19,7 +19,8 @@ class Order {
         int price;
         int orderId;
         int quantity;
-        bool isValid;
+        bool isCancelled;
+        bool isFulfilled;
     public:
         Order(int orderId, OrderSide side, OrderType type, int price, int quantity);
         ~Order();
@@ -34,7 +35,8 @@ class Order {
         int getQuantity() const;
         int getOrderId() const;
         bool valid() const;
-
+        
+        int fulfill(int qty);
         bool modify(int newQuantity, int newPrice);
         bool cancel();
 };

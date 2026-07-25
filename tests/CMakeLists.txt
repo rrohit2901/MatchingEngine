@@ -37,3 +37,12 @@ target_link_libraries(test_order_book PRIVATE
     project_options
 )
 add_test(NAME order_book_tests COMMAND test_order_book)
+
+add_executable(test_matcher test_matcher.cpp)
+target_link_libraries(test_matcher PRIVATE
+    me_core
+    GTest::gtest_main
+    project_warnings
+    project_options
+)
+add_test(NAME matcher_tests COMMAND test_matcher)

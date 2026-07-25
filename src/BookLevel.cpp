@@ -14,7 +14,15 @@ int BookLevel::getTotalQuantity() const {
     return totalQuantity;
 }
 
-const std::vector<std::shared_ptr<Order>>& BookLevel::getOrders() const {
+std::vector<std::shared_ptr<Order>> BookLevel::getOrders() const {
+    std::vector<std::shared_ptr<Order>> validOrders;
+    for(const std::shared_ptr<Order>& order: orders) {
+        if(order->valid()) validOrders.push_back(order);
+    } 
+    return validOrders;
+}
+
+std::vector<std::shared_ptr<Order>> BookLevel::getAllOrders() const {
     return orders;
 }
 
@@ -49,4 +57,13 @@ bool BookLevel::cancelOrder(std::shared_ptr<Order>& order) {
         return true;
     }
     return false;
+}
+
+int BookLevel::fillOrders(int qty) {
+    int rem_qty = qty;
+    for(std::shared_ptr<Order>& order: orders) {
+        rem_qty = order->fulfill(rem_qty);
+    }
+    totalQuantity = std::max(0, totalQuantity - qty);
+    return rem_qty;
 }

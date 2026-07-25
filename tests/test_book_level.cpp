@@ -59,7 +59,7 @@ TEST (BookLevel, ModifyOrderMoreQty_2_Orders) {
     EXPECT_EQ(bookLevel.getTotalQuantity(), 200);
     EXPECT_EQ(modifiedOrder->getPrice(), 2);
     EXPECT_EQ(modifiedOrder->getQuantity(), 150);
-    EXPECT_EQ(bookLevel.getOrders().size(), 3);
+    EXPECT_EQ(bookLevel.getOrders().size(), 2); // getOrders() returns only valid orders; order1 is now cancelled
     EXPECT_FALSE(order1->valid());
     EXPECT_NE(modifiedOrder, order1);
 }

@@ -58,9 +58,16 @@ bool OrderBook::modifyOrder(int orderId, int newQuantity, double newPrice, Order
     return buyLevels.addOrder(orderId, type, newPriceInt, newQuantity) != nullptr;
 }
 
-Order OrderBook::getOrder(int orderId) const {
+std::shared_ptr<Order> OrderBook::getOrder(int orderId) {
     if (buyLevels.isOrderIdExist(orderId)) {
         return buyLevels.getOrder(orderId);
     }
     return sellLevels.getOrder(orderId);
+}
+
+int OrderBook::fillOrders(OrderSide side, int target_price, int qty) {
+    if (side==OrderSide::BUY) {
+        return buyLevels.fillOrders(target_price, qty);
+    }
+    return sellLevels.fillOrders(target_price, qty);
 }
