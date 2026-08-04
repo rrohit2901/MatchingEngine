@@ -27,5 +27,6 @@ class OrderBook {
         bool cancelOrder(int orderId);
         bool modifyOrder(int orderId, int newQuantity, double newPrice, OrderSide newSide, OrderType type);
         int fillOrders(OrderSide side, int target_price, int qty);
+        int fillOrder(int orderId, int qty);
         std::shared_ptr<Order> getOrder(int orderId);
 };

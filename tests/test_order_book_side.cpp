@@ -57,6 +57,7 @@ TEST (OrderBookSide, AddMarketOrder) {
     EXPECT_EQ(order2->getQuantity(), 100);
 }
 
+
 TEST (OrderBookSide, CancelOrder) {
     OrderBookSide<OrderSide::BUY> orderBookSideBuy{};
     auto order = orderBookSideBuy.addOrder(1, OrderType::LIMIT, 1, 100);

@@ -1,30 +1,30 @@
-#include "OrderBook.h"
+#include "MatchingEngine.h"
 #include <iostream>
 
 int main() {
-    OrderBook orderBook;
+    MatchingEngine me;
 
     // Add some orders
-    int orderId1 = orderBook.addOrder(100.5, 10, OrderType::LIMIT, OrderSide::BUY);
-    int orderId2 = orderBook.addOrder(101.0, 5, OrderType::LIMIT, OrderSide::SELL);
+    int orderId1 = me.addOrder(100.5, 10, OrderType::LIMIT, OrderSide::BUY);
+    int orderId2 = me.addOrder(101.0, 5, OrderType::LIMIT, OrderSide::SELL);
 
-    int orderId3 = orderBook.addOrder(100.7, 10, OrderType::LIMIT, OrderSide::BUY);
-    int orderId4 = orderBook.addOrder(101.3, 5, OrderType::LIMIT, OrderSide::SELL);
+    int orderId3 = me.addOrder(100.7, 10, OrderType::LIMIT, OrderSide::BUY);
+    int orderId4 = me.addOrder(101.3, 5, OrderType::LIMIT, OrderSide::SELL);
 
-    int orderId5 = orderBook.addOrder(100.5, 10, OrderType::LIMIT, OrderSide::BUY);
-    int orderId6 = orderBook.addOrder(102.5, 5, OrderType::LIMIT, OrderSide::SELL);
+    int orderId5 = me.addOrder(100.5, 10, OrderType::LIMIT, OrderSide::BUY);
+    int orderId6 = me.addOrder(102.5, 5, OrderType::LIMIT, OrderSide::SELL);
 
-    int orderId7 = orderBook.addOrder(102.5, 10, OrderType::LIMIT, OrderSide::BUY);
+    int orderId7 = me.addOrder(102.5, 10, OrderType::LIMIT, OrderSide::BUY);
 
     // Modify an order
-    orderBook.modifyOrder(orderId1, 15, 100.5, OrderSide::BUY, OrderType::LIMIT);
-    orderBook.modifyOrder(orderId3, 15, 100.5, OrderSide::SELL, OrderType::LIMIT);
+    // orderBook.modifyOrder(orderId1, 15, 100.5, OrderSide::BUY, OrderType::LIMIT);
+    // orderBook.modifyOrder(orderId3, 15, 100.5, OrderSide::SELL, OrderType::LIMIT);
 
-    // Cancel an order
-    orderBook.cancelOrder(orderId2);
+    // // Cancel an order
+    // orderBook.cancelOrder(orderId2);
 
     // Get order book view
-    auto [buyLevels, sellLevels] = orderBook.getOrderBookView(5);
+    auto [buyLevels, sellLevels] = me.getOrderBookView(5);
     std::cout << "Buy Levels:" << std::endl;
     for (const auto& level : buyLevels) {
         std::cout << "Price: " << level->getPrice() << ", Quantity: " << level->getTotalQuantity() << std::endl;

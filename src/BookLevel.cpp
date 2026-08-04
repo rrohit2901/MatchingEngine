@@ -67,3 +67,8 @@ int BookLevel::fillOrders(int qty) {
     totalQuantity = std::max(0, totalQuantity - qty);
     return rem_qty;
 }
+
+int BookLevel::removeQuantity(int qty) {
+    totalQuantity -= qty;
+    return totalQuantity;
+}

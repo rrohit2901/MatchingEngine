@@ -71,3 +71,10 @@ int OrderBook::fillOrders(OrderSide side, int target_price, int qty) {
     }
     return sellLevels.fillOrders(target_price, qty);
 }
+
+int OrderBook::fillOrder(int order_id, int qty) {
+    if (buyLevels.isOrderIdExist(order_id)) {
+        return buyLevels.fillOrder(order_id, qty);
+    }
+    return sellLevels.fillOrder(order_id, qty);
+}

@@ -165,4 +165,13 @@ class OrderBookSide {
             }
             return qty;
         }
+
+        int fillOrder(int order_id, int qty) {
+            auto& [bookLevel, order] = orderIdMap.find(order_id)->second;
+            int rem_qty = order->fulfill(qty);
+            int filled_qty = qty - rem_qty;
+            bookLevel->removeQuantity(filled_qty);
+            if(!order->valid()) orderIdMap.erase(order_id);
+            return rem_qty;
+        }
 };

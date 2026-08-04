@@ -27,4 +27,5 @@ class BookLevel {
         std::shared_ptr<Order> modifyOrder(std::shared_ptr<Order>& order, int newQuantity, int newPrice);
         bool cancelOrder(std::shared_ptr<Order>& order);
         int fillOrders(int qty);
+        int removeQuantity(int qty);
 };

@@ -6,8 +6,8 @@
 
 class Matcher {
     private:
-        OrderBook order_book;
+        std::shared_ptr<OrderBook> order_book;
     public:
-        Matcher(OrderBook& order_book);
+        Matcher(std::shared_ptr<OrderBook>& order_book);
         bool tryMatch(int order_id);
 };
