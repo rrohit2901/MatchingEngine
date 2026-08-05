@@ -74,8 +74,6 @@ add_library(me_core
     src/me/Order.cpp
     src/me/OrderManager.cpp
     src/me/OrderBook.cpp
-    src/me/Matcher.cpp
-    src/me/MatchingEngine.cpp
 )
 target_include_directories(me_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/me)
 target_link_libraries(me_core PRIVATE project_warnings project_options)

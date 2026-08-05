@@ -27,7 +27,7 @@ bool Matcher<InputCont, T>::tryMatch(order_id_t order_id) {
 
     OrderSide opposite = (order->side==OrderSide::BUY) ? OrderSide::SELL : OrderSide::BUY;
 
-    vector<TradeEvent> filled_orders;
+    std::vector<TradeEvent> filled_orders;
     int rem_qty = order_book->fillOrders(opposite, order->price, order->quantity, filled_orders, order_id);
 
     order_book->modifyOrder(order_id, rem_qty, order->price, order->side, order->type);

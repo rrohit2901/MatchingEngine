@@ -25,7 +25,7 @@ class EventManager {
         }
 
         void addTradeEvent(const TradeEvent& trade_event) {
-            event_container->push(std::make_unique<TradeEvent>(trade_Event));
+            event_container->push(std::make_unique<TradeEvent>(trade_event));
         }
 
         void addLimitOrderAddEvent(order_id_t order_id, int price, int qty, OrderSide side) {
