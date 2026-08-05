@@ -13,7 +13,7 @@ class MatchingEngine {
         std::vector<std::shared_ptr<BookLevel>> getSellSideView(int numLevels = 1) const;
         std::pair<std::vector<std::shared_ptr<BookLevel>>, std::vector<std::shared_ptr<BookLevel>>> getOrderBookView(int numLevels = 1) const;
 
-        int addOrder(double price, int quantity, OrderType type, OrderSide side);
-        bool cancelOrder(int orderId);
-        bool modifyOrder(int orderId, int newQuantity, double newPrice, OrderSide newSide, OrderType type);
+        order_id_t addOrder(int price, int quantity, OrderType type, OrderSide side);
+        bool cancelOrder(order_id_t orderId);
+        std::optional<order_id_t> modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type);
 };

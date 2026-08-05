@@ -154,17 +154,20 @@ Stats measureModify(int n) {
     int i = 0;
     for (int w = 0; w < kWarmup; ++w) {
         const int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
-        g_sink = book.modifyOrder(id, kQuantity + 1, kBasePrice + 1 + (i++ % kPriceLevels), OrderSide::BUY, OrderType::LIMIT);
-        book.cancelOrder(id);
+        const auto modified = book.modifyOrder(id, kQuantity + 1, static_cast<int>(kBasePrice) + 1 + (i++ % kPriceLevels), OrderSide::BUY, OrderType::LIMIT);
+        g_sink = modified.has_value();
+        book.cancelOrder(modified.value_or(id));
     }
     for (int k = 0; k < n; ++k) {
         const int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);  // untimed setup
-        const double newPrice = kBasePrice + 1 + (i++ % kPriceLevels);
+        const int newPrice = static_cast<int>(kBasePrice) + 1 + (i++ % kPriceLevels);
         const auto t0 = Clock::now();
-        const bool ok = book.modifyOrder(id, kQuantity + 1, newPrice, OrderSide::BUY, OrderType::LIMIT);
+        const auto modified = book.modifyOrder(id, kQuantity + 1, newPrice, OrderSide::BUY, OrderType::LIMIT);
         const auto t1 = Clock::now();
-        g_sink = ok;
-        book.cancelOrder(id);  // untimed cleanup keeps the book bounded
+        g_sink = modified.has_value();
+        // A reprice mints a new id; cancelling `id` here would leak the repriced
+        // order and let the book grow across all n samples.
+        book.cancelOrder(modified.value_or(id));  // untimed cleanup keeps the book bounded
         s.push_back(nanos(t0, t1));
     }
     return summarize(s);

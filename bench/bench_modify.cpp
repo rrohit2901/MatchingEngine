@@ -32,7 +32,7 @@ void BM_Modify_QuantityOnly(benchmark::State& state) {
         state.ResumeTiming();
 
         // Same price/side as the resting order; only quantity differs.
-        bool ok = book.modifyOrder(id, ++newQty, kBasePrice, OrderSide::BUY, OrderType::LIMIT);
+        bool ok = book.modifyOrder(id, ++newQty, kBasePrice, OrderSide::BUY, OrderType::LIMIT).has_value();
         benchmark::DoNotOptimize(ok);
 
         state.PauseTiming();
@@ -51,11 +51,13 @@ void BM_Modify_ChangePriceLevel(benchmark::State& state) {
         int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         state.ResumeTiming();
 
-        bool ok = book.modifyOrder(id, kQuantity, kAltPrice, OrderSide::BUY, OrderType::LIMIT);
-        benchmark::DoNotOptimize(ok);
+        auto modified = book.modifyOrder(id, kQuantity, kAltPrice, OrderSide::BUY, OrderType::LIMIT);
+        benchmark::DoNotOptimize(modified);
 
         state.PauseTiming();
-        book.cancelOrder(id);
+        // A reprice mints a new id, so cleaning up `id` would leak the order and
+        // let the book grow without bound across iterations.
+        book.cancelOrder(modified.value_or(id));
         state.ResumeTiming();
     }
     state.SetItemsProcessed(state.iterations());
@@ -70,11 +72,12 @@ void BM_Modify_ChangeSide(benchmark::State& state) {
         int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         state.ResumeTiming();
 
-        bool ok = book.modifyOrder(id, kQuantity, kAltPrice, OrderSide::SELL, OrderType::LIMIT);
-        benchmark::DoNotOptimize(ok);
+        auto modified = book.modifyOrder(id, kQuantity, kAltPrice, OrderSide::SELL, OrderType::LIMIT);
+        benchmark::DoNotOptimize(modified);
 
         state.PauseTiming();
-        book.cancelOrder(id);
+        // Switching sides re-books the order under a new id; see above.
+        book.cancelOrder(modified.value_or(id));
         state.ResumeTiming();
     }
     state.SetItemsProcessed(state.iterations());

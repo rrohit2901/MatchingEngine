@@ -8,7 +8,7 @@
 
 class OrderBook {
     private:
-        int orderIdCounter = 0;
+        std::shared_ptr<OrderManager> order_manager;
         OrderBookSide<OrderSide::BUY> buyLevels;
         OrderBookSide<OrderSide::SELL> sellLevels;
     public:
@@ -23,10 +23,14 @@ class OrderBook {
         std::vector<std::shared_ptr<BookLevel>> getSellSideView(int numLevels = 1) const;
         std::pair<std::vector<std::shared_ptr<BookLevel>>, std::vector<std::shared_ptr<BookLevel>>> getOrderBookView(int numLevels = 1) const;
 
-        int addOrder(double price, int quantity, OrderType type, OrderSide side);
-        bool cancelOrder(int orderId);
-        bool modifyOrder(int orderId, int newQuantity, double newPrice, OrderSide newSide, OrderType type);
+        order_id_t addOrder(int price, int quantity, OrderType type, OrderSide side);
+        bool cancelOrder(order_id_t orderId);
+        std::optional<order_id_t> modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type);
         int fillOrders(OrderSide side, int target_price, int qty);
-        int fillOrder(int orderId, int qty);
-        std::shared_ptr<Order> getOrder(int orderId);
+
+        std::optional<OrderSide> getOrderSide(order_id_t order_id) const;
+        std::optional<OrderType> getOrderType(order_id_t order_id) const;
+        std::optional<int> getOrderPrice(order_id_t order_id) const;
+        std::optional<int> getOrderQuantity(order_id_t order_id) const;
+        bool IsOrderValid(order_id_t order_id) const;
 };

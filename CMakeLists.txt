@@ -69,13 +69,17 @@ FetchContent_MakeAvailable(googletest benchmark)
 # -----------------------------------------------------------------------------
 # Core library
 # -----------------------------------------------------------------------------
-add_library(me_core src/BookLevel.cpp src/OrderBook.cpp src/Order.cpp src/Matcher.cpp src/MatchingEngine.cpp)
-target_include_directories(me_core PUBLIC include/me)
+add_library(me_core
+    src/me/BookLevel.cpp
+    src/me/Order.cpp
+    src/me/OrderManager.cpp
+    src/me/OrderBook.cpp
+    src/me/Matcher.cpp
+    src/me/MatchingEngine.cpp
+)
+target_include_directories(me_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/me)
 target_link_libraries(me_core PRIVATE project_warnings project_options)
- 
-# Header-only stub so the empty library builds; remove when you add src files.
-set_target_properties(me_core PROPERTIES LINKER_LANGUAGE CXX)
- 
+
 # -----------------------------------------------------------------------------
 # Main executable
 # -----------------------------------------------------------------------------
@@ -83,12 +87,14 @@ add_executable(me_main src/main.cpp)
 target_link_libraries(me_main PRIVATE me_core project_warnings project_options)
  
 # -----------------------------------------------------------------------------
-# Lock-based data structures (practice) — compile-check only
-# Forces instantiation of the LockQueue template so build surfaces its errors.
+# Lock-based data structures (practice) — header-only.
+# Headers live in include/data_structures/; there is no .cpp, so this is an
+# INTERFACE target. Link it from anything that includes lock_queue.h.
+# (The old compile-check TU is gone; add one back and switch this to STATIC if
+# you want the build to force template instantiation again.)
 # -----------------------------------------------------------------------------
-add_library(me_ds_lock STATIC me_ds_lock/lock_queue_compile_check.cpp)
-target_include_directories(me_ds_lock PUBLIC me_ds_lock)
-target_link_libraries(me_ds_lock PRIVATE project_warnings project_options)
+add_library(me_ds_lock INTERFACE)
+target_include_directories(me_ds_lock INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include/data_structures)
 
 # -----------------------------------------------------------------------------
 # Tests

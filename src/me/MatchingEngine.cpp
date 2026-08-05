@@ -2,21 +2,22 @@
 
 MatchingEngine::MatchingEngine(): order_book{std::make_shared<OrderBook>()}, matcher{order_book} {}
 
-int MatchingEngine::addOrder(double price, int quantity, OrderType type, OrderSide side) {
-    int order_id = order_book->addOrder(price, quantity, type, side);
+order_id_t MatchingEngine::addOrder(int price, int quantity, OrderType type, OrderSide side) {
+    order_id_t order_id = order_book->addOrder(price, quantity, type, side);
     matcher.tryMatch(order_id);
 
     return order_id;
 }
 
-bool MatchingEngine::cancelOrder(int order_id) {
+bool MatchingEngine::cancelOrder(order_id_t order_id) {
     return order_book->cancelOrder(order_id);
 }
 
-bool MatchingEngine::modifyOrder(int orderId, int newQuantity, double newPrice, OrderSide newSide, OrderType type) {
-    bool done =  order_book->modifyOrder(orderId, newQuantity, newPrice, newSide, type);
-    matcher.tryMatch(orderId);
-    return done;
+std::optional<order_id_t> MatchingEngine::modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type) {
+    auto modified_order_id =  order_book->modifyOrder(orderId, newQuantity, newPrice, newSide, type);
+    if(modified_order_id)
+        matcher.tryMatch(modified_order_id.value());
+    return modified_order_id;
 }
 
 std::vector<std::shared_ptr<BookLevel>> MatchingEngine::getBuySideView(int numLevels) const {

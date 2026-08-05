@@ -2,6 +2,7 @@
 
 #include "BookLevel.h"
 #include "Order.h"
+#include "OrderManager.h"
 
 #include <map>
 #include <unordered_map>
@@ -13,29 +14,11 @@ class OrderBookSide {
     private:
         int marketPrice = (side == OrderSide::BUY) ? std::numeric_limits<int>::max() : std::numeric_limits<int>::min();
         using Comparator = std::conditional_t<side == OrderSide::BUY, std::greater<int>, std::less<int>>;
+
         std::map<int, std::shared_ptr<BookLevel>, Comparator> priceLevels; 
-        std::unordered_map<int, std::pair<std::shared_ptr<BookLevel>, std::shared_ptr<Order>>> orderIdMap;
-
-        std::shared_ptr<Order> addLimitOrder(int orderId, int price, int quantity) {
-            if(priceLevels.find(price) == priceLevels.end()) {
-                priceLevels[price] = std::make_shared<BookLevel>(price);
-            }
-            auto order = priceLevels[price]->addOrder(orderId, side, OrderType::LIMIT, price, quantity);
-            orderIdMap[orderId] = {priceLevels[price], order};
-            return order;
-        }
-
-        std::shared_ptr<Order> addMarketOrder(int orderId, int quantity) {
-            int price = marketPrice;
-            if(priceLevels.find(price) == priceLevels.end()) {
-                priceLevels[price] = std::make_shared<BookLevel>(price);
-            }
-            auto order = priceLevels[price]->addOrder(orderId, side, OrderType::MARKET, price, quantity);
-            orderIdMap[orderId] = {priceLevels[price], order};
-            return order;
-        }
+        std::shared_ptr<OrderManager> order_manager;
     public:
-        OrderBookSide() {};
+        OrderBookSide(std::shared_ptr<OrderManager>& order_manager): order_manager(order_manager) {};
         ~OrderBookSide() = default;
         OrderBookSide(const OrderBookSide&) = default;
         OrderBookSide& operator=(const OrderBookSide&) = default;
@@ -55,123 +38,87 @@ class OrderBookSide {
         }
 
         bool isOrderIdExist(int orderId) const {
-            return orderIdMap.find(orderId) != orderIdMap.end();
+            return order_manager->valid(orderId) && (order_manager->getSide(orderId)==side);
         }
 
-        const BookLevel& getLevel(int price) const {
+        std::optional<const BookLevel> getLevel(int price) const {
             if (priceLevels.find(price) == priceLevels.end()) {
-                throw std::runtime_error("Price level does not exist");
+                return std::nullopt;
             }
             return *priceLevels.at(price);
         }
 
-        std::vector<std::shared_ptr<BookLevel>> getBookSideView(int numLevels = 1) const {
+        std::vector<std::shared_ptr<BookLevel>> getBookSideView(unsigned numLevels = 1) const {
             std::vector<std::shared_ptr<BookLevel>> levels;
             for (const auto& [price, level] : priceLevels) {
-                levels.push_back(level);
-                if (static_cast<int>(levels.size()) >= numLevels) {
+                if (levels.size() >= numLevels) {
                     break;
                 }
+                levels.push_back(level);
             }
             return levels;
         }
 
-        std::shared_ptr<Order> addOrder(int orderId, OrderType type, int price, int quantity) {
-            if (type == OrderType::LIMIT) {
-                return addLimitOrder(orderId, price, quantity);
-            } else if (type == OrderType::MARKET) {
-                return addMarketOrder(orderId, quantity);
+        order_id_t addOrder(OrderType type, int price, int quantity) {
+            if(priceLevels.find(price)==priceLevels.end()) {
+                priceLevels[price] = std::make_shared<BookLevel> (order_manager, price);
             }
-            return nullptr;
+            return priceLevels[price]->addOrder(side, type, price, quantity);
         }
 
-        bool cancelOrder(int orderId) {
-            if (orderIdMap.find(orderId) == orderIdMap.end()) {
+        bool cancelOrder(order_id_t orderId) {
+            if (!isOrderIdExist(orderId)) {
                 return false;
             }
-            auto& [level, order] = orderIdMap[orderId];
-            bool isCancelled = level->cancelOrder(order);
-            if (level->getTotalQuantity() == 0) {
-                priceLevels.erase(order->getPrice());
+            int order_price = order_manager->getPrice(orderId).value();
+            std::shared_ptr<BookLevel> book_level = priceLevels[order_price];
+            bool is_cancelled = book_level->cancelOrder(orderId);
+
+            if(book_level->getTotalQuantity()==0) {
+                priceLevels.erase(order_price);
             }
-            if(isCancelled){
-                orderIdMap.erase(orderId);
-            }
-            return isCancelled;
+            return is_cancelled;
         }
 
-        std::shared_ptr<Order> modifyOrder(int orderId, int newQuantity, int newPrice) {
-            if (orderIdMap.find(orderId) == orderIdMap.end()) {
-                return nullptr;
+        order_id_t modifyOrder(int orderId, int newQuantity, int newPrice) {
+            if (!isOrderIdExist(orderId)) {
+                return false;
             }
-            auto& [level, order] = orderIdMap[orderId];
-            std::shared_ptr<Order> modifiedOrder;
+            int order_price = order_manager->getPrice(orderId).value();
+            std::shared_ptr<BookLevel> book_level = priceLevels[order_price];
 
-            if(newPrice == order->getPrice()) {
-                modifiedOrder = level->modifyOrder(order, newQuantity, newPrice);
+            order_id_t modifiedOrder;
+
+            if(newPrice == order_manager->getPrice(orderId)) {
+                modifiedOrder = book_level->modifyOrder(orderId, newQuantity, newPrice).value();
             } else {
-                level->cancelOrder(order);
-                if (level->getTotalQuantity() == 0) {
-                    priceLevels.erase(order->getPrice());
-                }
-                if(priceLevels.find(newPrice) == priceLevels.end()) {
-                    priceLevels[newPrice] = std::make_shared<BookLevel>(newPrice);
-                }
-                modifiedOrder = priceLevels[newPrice]->addOrder(orderId, side, order->getType(), newPrice, newQuantity);
+                modifiedOrder = addOrder(order_manager->getType(orderId).value(), newPrice, newQuantity);
+                // Return value is not relevant since we know that orderId is valid.
+                cancelOrder(orderId);
             }
-            if(modifiedOrder) {
-                orderIdMap[orderId] = {priceLevels[newPrice], modifiedOrder};
-            }
+            if(auto price_level = priceLevels.find(order_price); price_level!=priceLevels.end() && price_level->second->getTotalQuantity()==0) priceLevels.erase(order_price);
             
             return modifiedOrder;
-        }
-
-        std::shared_ptr<Order> getOrder(int orderId) const {
-            if (orderIdMap.find(orderId) == orderIdMap.end()) {
-                return std::shared_ptr<Order>();
-            }
-            return orderIdMap.at(orderId).second;
         }
 
         std::vector<std::shared_ptr<BookLevel>> getCandidateLevels (int curr_price) {
             std::vector<std::shared_ptr<BookLevel>> candidateLevels;
             for(auto& [price, bookLevel]: priceLevels) {
-                if(side==OrderSide::BUY && curr_price <= price) {
-                    candidateLevels.push_back(bookLevel);
-                }
-                else if(side==OrderSide::SELL && curr_price>=price) {
-                    candidateLevels.push_back(bookLevel);
-                }
+                bool isCrossed = (side==OrderSide::BUY) ? (curr_price<=price) : (curr_price>=price);
+                if(isCrossed) {candidateLevels.push_back(bookLevel);}
+                else {break;}
             }
             return candidateLevels;
         }
 
         int fillOrders(int target_price, int qty) {
-            for (auto it = priceLevels.begin(); it != priceLevels.end(); ) {
-                const auto& [price, bookLevel] = *it;
-                bool is_valid = (side==OrderSide::BUY && target_price<=price) || (side==OrderSide::SELL && target_price>=price);
-                if(is_valid && qty){
-                    qty = bookLevel->fillOrders(qty);
-                    if(bookLevel->getTotalQuantity()==0) {
-                        for(const std::shared_ptr<Order>& order: bookLevel->getAllOrders()) {
-                            orderIdMap.erase(order->getOrderId());
-                        }
-                        it = priceLevels.erase(it);
-                    } else {
-                        ++it;
-                    }
+            std::vector<std::shared_ptr<BookLevel>> candidates = getCandidateLevels(target_price);
+            for(std::shared_ptr<BookLevel>& candidate: candidates) {
+                qty = candidate->fillOrders(qty);
+                if(candidate->getTotalQuantity()==0) {
+                    priceLevels.erase(candidate->getPrice());
                 }
-                else break;
             }
             return qty;
-        }
-
-        int fillOrder(int order_id, int qty) {
-            auto& [bookLevel, order] = orderIdMap.find(order_id)->second;
-            int rem_qty = order->fulfill(qty);
-            int filled_qty = qty - rem_qty;
-            bookLevel->removeQuantity(filled_qty);
-            if(!order->valid()) orderIdMap.erase(order_id);
-            return rem_qty;
         }
 };

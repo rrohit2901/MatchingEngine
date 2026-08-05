@@ -1,6 +1,6 @@
 #include "Order.h"
 
-Order::Order(int orderId, OrderSide side, OrderType type, int price, int quantity) 
+Order::Order(order_id_t orderId, OrderSide side, OrderType type, int price, int quantity) 
     : orderId(orderId), side(side), type(type), price(price), quantity(quantity), isCancelled(false), isFulfilled(false) {}
 
 Order::~Order() = default;
@@ -52,7 +52,7 @@ int Order::getQuantity() const {
     return quantity;
 }
 
-int Order::getOrderId() const {
+order_id_t Order::getOrderId() const {
     return orderId;
 }
 
@@ -87,5 +87,8 @@ bool Order::modify(int newQuantity, int newPrice) {
     }
     quantity = newQuantity;
     price = newPrice;
+    if(quantity==0) {
+        isFulfilled = true;
+    }
     return true;
 }

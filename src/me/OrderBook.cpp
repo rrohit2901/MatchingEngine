@@ -1,6 +1,6 @@
 #include "OrderBook.h"
 
-OrderBook::OrderBook() = default;
+OrderBook::OrderBook(): order_manager{std::make_shared<OrderManager>()}, buyLevels{order_manager}, sellLevels{order_manager} {};
 OrderBook::~OrderBook() = default;
 OrderBook::OrderBook(const OrderBook& other) = default;
 OrderBook& OrderBook::operator=(const OrderBook& other) = default;
@@ -19,50 +19,41 @@ std::pair<std::vector<std::shared_ptr<BookLevel>>, std::vector<std::shared_ptr<B
     return {buyLevels.getBookSideView(numLevels), sellLevels.getBookSideView(numLevels)};
 }
 
-int OrderBook::addOrder(double price, int quantity, OrderType type, OrderSide side) {
-    int priceInt = static_cast<int>(price * PRICE_MULTIPLIER);
-    int orderId = ++orderIdCounter;
+order_id_t OrderBook::addOrder(int price, int quantity, OrderType type, OrderSide side) {
+    order_id_t order_id;
     if (side == OrderSide::BUY) {
-        buyLevels.addOrder(orderId, type, priceInt, quantity);
+        order_id = buyLevels.addOrder(type, price, quantity);
     } else {
-        sellLevels.addOrder(orderId, type, priceInt, quantity);
+        order_id = sellLevels.addOrder(type, price, quantity);
     }
-    return orderId;
+    return order_id;
 }
 
-bool OrderBook::cancelOrder(int orderId) { // This can be simplified by using a order manager class
+bool OrderBook::cancelOrder(order_id_t orderId) { 
     if (buyLevels.isOrderIdExist(orderId)) {
         return buyLevels.cancelOrder(orderId);
     }
     return sellLevels.cancelOrder(orderId);
 }
 
-bool OrderBook::modifyOrder(int orderId, int newQuantity, double newPrice, OrderSide newSide, OrderType type) { // This can be simplified by using a order manager class
-    int newPriceInt = static_cast<int>(newPrice * PRICE_MULTIPLIER);
+std::optional<order_id_t> OrderBook::modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type) { 
     bool isBuySide = buyLevels.isOrderIdExist(orderId);
     bool isSellSide = sellLevels.isOrderIdExist(orderId);
     if (!isBuySide && !isSellSide) {
-        return false;
+        return std::nullopt;
     }
     if (isBuySide) {
         if (newSide == OrderSide::BUY) {
-            return buyLevels.modifyOrder(orderId, newQuantity, newPriceInt) != nullptr;
+            return buyLevels.modifyOrder(orderId, newQuantity, newPrice);
         }
         buyLevels.cancelOrder(orderId);
-        return sellLevels.addOrder(orderId, type, newPriceInt, newQuantity) != nullptr;
+        return sellLevels.addOrder(type, newPrice, newQuantity);
     }
     if (newSide == OrderSide::SELL) {
-        return sellLevels.modifyOrder(orderId, newQuantity, newPriceInt) != nullptr;
+        return sellLevels.modifyOrder(orderId, newQuantity, newPrice);
     }
     sellLevels.cancelOrder(orderId);
-    return buyLevels.addOrder(orderId, type, newPriceInt, newQuantity) != nullptr;
-}
-
-std::shared_ptr<Order> OrderBook::getOrder(int orderId) {
-    if (buyLevels.isOrderIdExist(orderId)) {
-        return buyLevels.getOrder(orderId);
-    }
-    return sellLevels.getOrder(orderId);
+    return buyLevels.addOrder(type, newPrice, newQuantity);
 }
 
 int OrderBook::fillOrders(OrderSide side, int target_price, int qty) {
@@ -72,9 +63,23 @@ int OrderBook::fillOrders(OrderSide side, int target_price, int qty) {
     return sellLevels.fillOrders(target_price, qty);
 }
 
-int OrderBook::fillOrder(int order_id, int qty) {
-    if (buyLevels.isOrderIdExist(order_id)) {
-        return buyLevels.fillOrder(order_id, qty);
-    }
-    return sellLevels.fillOrder(order_id, qty);
+std::optional<OrderSide> OrderBook::getOrderSide(order_id_t order_id) const {
+    return order_manager->getSide(order_id);
 }
+
+std::optional<OrderType> OrderBook::getOrderType(order_id_t order_id) const {
+    return order_manager->getType(order_id);
+}
+
+std::optional<int> OrderBook::getOrderPrice(order_id_t order_id) const {
+    return order_manager->getPrice(order_id);
+}
+
+std::optional<int> OrderBook::getOrderQuantity(order_id_t order_id) const {
+    return order_manager->getQuantity(order_id);
+}
+
+bool OrderBook::IsOrderValid(order_id_t order_id) const {
+    return order_manager->valid(order_id);
+}
+

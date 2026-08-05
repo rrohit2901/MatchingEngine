@@ -9,5 +9,5 @@ class Matcher {
         std::shared_ptr<OrderBook> order_book;
     public:
         Matcher(std::shared_ptr<OrderBook>& order_book);
-        bool tryMatch(int order_id);
+        bool tryMatch(order_id_t order_id);
 };

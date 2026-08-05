@@ -1,17 +1,25 @@
 #pragma once
+
 #include "Order.h"
+#include "OrderManager.h"
+
 #include <vector>
 #include <memory>
 
 
 class BookLevel {
     private:
-        int totalQuantity;
+        int total_quantity;
         int price;
-        std::vector<std::shared_ptr<Order>> orders;
+        int total_orders;
+        int valid_orders;
+        std::shared_ptr<OrderManager> order_manager;
+        std::vector<order_id_t> orders;
+
+        void compact();
     public:
         BookLevel();
-        BookLevel(int price);
+        BookLevel(std::shared_ptr<OrderManager>& order_manager, int price);
         ~BookLevel();
         BookLevel(const BookLevel&);
         BookLevel& operator=(const BookLevel&);
@@ -19,13 +27,12 @@ class BookLevel {
         BookLevel& operator=(BookLevel&&) noexcept;
 
         int getTotalQuantity() const;
-        std::vector<std::shared_ptr<Order>> getOrders() const;
-        std::vector<std::shared_ptr<Order>> getAllOrders() const;
-        double getPrice() const;
+        std::vector<order_id_t> getOrders() const;
+        std::vector<order_id_t> getAllOrders() const;
+        int getPrice() const;
 
-        std::shared_ptr<Order> addOrder(int orderId, OrderSide side, OrderType type, int price, int quantity);
-        std::shared_ptr<Order> modifyOrder(std::shared_ptr<Order>& order, int newQuantity, int newPrice);
-        bool cancelOrder(std::shared_ptr<Order>& order);
+        order_id_t addOrder(OrderSide side, OrderType type, int price, unsigned int quantity);
+        std::optional<order_id_t> modifyOrder(order_id_t order, int new_quantity, int new_price);
+        bool cancelOrder(order_id_t order_id);
         int fillOrders(int qty);
-        int removeQuantity(int qty);
 };

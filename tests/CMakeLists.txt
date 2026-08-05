@@ -46,3 +46,21 @@ target_link_libraries(test_matcher PRIVATE
     project_options
 )
 add_test(NAME matcher_tests COMMAND test_matcher)
+
+add_executable(test_order_manager test_order_manager.cpp)
+target_link_libraries(test_order_manager PRIVATE
+    me_core
+    GTest::gtest_main
+    project_warnings
+    project_options
+)
+add_test(NAME order_manager_tests COMMAND test_order_manager)
+
+add_executable(test_matching_engine test_matching_engine.cpp)
+target_link_libraries(test_matching_engine PRIVATE
+    me_core
+    GTest::gtest_main
+    project_warnings
+    project_options
+)
+add_test(NAME matching_engine_tests COMMAND test_matching_engine)

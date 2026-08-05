@@ -10,7 +10,7 @@ enum class OrderType {
     MARKET
 };
 
-const double PRICE_MULTIPLIER = 10000; // To convert price to integer representation
+using order_id_t = unsigned int;
 
 class Order {
     private:
@@ -22,7 +22,7 @@ class Order {
         bool isCancelled;
         bool isFulfilled;
     public:
-        Order(int orderId, OrderSide side, OrderType type, int price, int quantity);
+        Order(order_id_t orderId, OrderSide side, OrderType type, int price, int quantity);
         ~Order();
         Order(const Order&);
         Order& operator=(const Order&);
@@ -33,7 +33,7 @@ class Order {
         OrderType getType() const;
         int getPrice() const;
         int getQuantity() const;
-        int getOrderId() const;
+        order_id_t getOrderId() const;
         bool valid() const;
         
         int fulfill(int qty);
