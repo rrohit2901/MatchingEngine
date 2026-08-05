@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Order.h"
+#include "Events.h"
 #include "OrderManager.h"
 
 #include <vector>
@@ -34,5 +35,5 @@ class BookLevel {
         order_id_t addOrder(OrderSide side, OrderType type, int price, int quantity);
         std::optional<order_id_t> modifyOrder(order_id_t order, int new_quantity, int new_price);
         bool cancelOrder(order_id_t order_id);
-        int fillOrders(int qty);
+        int fillOrders(int qty, std::vector<TradeEvent>& filled_orders, order_id_t counter_order_id);
 };

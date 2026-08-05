@@ -56,11 +56,11 @@ std::optional<order_id_t> OrderBook::modifyOrder(order_id_t orderId, int newQuan
     return buyLevels.addOrder(type, newPrice, newQuantity);
 }
 
-int OrderBook::fillOrders(OrderSide side, int target_price, int qty) {
+int OrderBook::fillOrders(OrderSide side, int target_price, int qty, std::vector<TradeEvent>& filled_orders, order_id_t counter_order_id) {
     if (side==OrderSide::BUY) {
-        return buyLevels.fillOrders(target_price, qty);
+        return buyLevels.fillOrders(target_price, qty, filled_orders, counter_order_id);
     }
-    return sellLevels.fillOrders(target_price, qty);
+    return sellLevels.fillOrders(target_price, qty, filled_orders, counter_order_id);
 }
 
 std::optional<OrderView> OrderBook::getOrderView(order_id_t order_id) const {

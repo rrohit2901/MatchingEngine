@@ -3,6 +3,7 @@
 #include "BookLevel.h"
 #include "Order.h"
 #include "OrderManager.h"
+#include "Events.h"
 
 #include <map>
 #include <unordered_map>
@@ -116,10 +117,10 @@ class OrderBookSide {
             return candidateLevels;
         }
 
-        int fillOrders(int target_price, int qty) {
+        int fillOrders(int target_price, int qty, std::vector<TradeEvent>& filled_orders, order_id_t counter_order_id) {
             std::vector<std::shared_ptr<BookLevel>> candidates = getCandidateLevels(target_price);
             for(std::shared_ptr<BookLevel>& candidate: candidates) {
-                qty = candidate->fillOrders(qty);
+                qty = candidate->fillOrders(qty, filled_orders, counter_order_id);
                 if(candidate->getTotalQuantity()==0) {
                     priceLevels.erase(candidate->getPrice());
                 }

@@ -2,6 +2,7 @@
 
 #include "OrderBookSide.h"
 #include "Order.h"
+#include "Events.h"
 #include<vector>
 #include<memory>
 
@@ -26,7 +27,7 @@ class OrderBook {
         order_id_t addOrder(int price, int quantity, OrderType type, OrderSide side);
         bool cancelOrder(order_id_t orderId);
         std::optional<order_id_t> modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type);
-        int fillOrders(OrderSide side, int target_price, int qty);
+        int fillOrders(OrderSide side, int target_price, int qty, std::vector<TradeEvent>& filled_orders, order_id_t counter_order_id);
 
         // Preferred accessor: one OrderManager lookup for every field.
         std::optional<OrderView> getOrderView(order_id_t order_id) const;
