@@ -28,6 +28,9 @@ class OrderBook {
         std::optional<order_id_t> modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type);
         int fillOrders(OrderSide side, int target_price, int qty);
 
+        // Preferred accessor: one OrderManager lookup for every field.
+        std::optional<OrderView> getOrderView(order_id_t order_id) const;
+
         std::optional<OrderSide> getOrderSide(order_id_t order_id) const;
         std::optional<OrderType> getOrderType(order_id_t order_id) const;
         std::optional<int> getOrderPrice(order_id_t order_id) const;

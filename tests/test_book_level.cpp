@@ -36,10 +36,10 @@ TEST_F(BookLevelTest, AddOrder) {
     EXPECT_EQ(level.getOrders().front(), id);
 
     ASSERT_TRUE(order_manager->valid(id));
-    EXPECT_EQ(order_manager->getSide(id).value(), OrderSide::BUY);
-    EXPECT_EQ(order_manager->getType(id).value(), OrderType::LIMIT);
-    EXPECT_EQ(order_manager->getPrice(id).value(), 100);
-    EXPECT_EQ(order_manager->getQuantity(id).value(), 10);
+    EXPECT_EQ(order_manager->getView(id).value().side, OrderSide::BUY);
+    EXPECT_EQ(order_manager->getView(id).value().type, OrderType::LIMIT);
+    EXPECT_EQ(order_manager->getView(id).value().price, 100);
+    EXPECT_EQ(order_manager->getView(id).value().quantity, 10);
 }
 
 TEST_F(BookLevelTest, AddTwoOrdersAccumulatesQuantity) {
@@ -61,7 +61,7 @@ TEST_F(BookLevelTest, ModifyOrderLessQtyKeepsSameId) {
     // Shrinking in place keeps queue position, so the id survives.
     EXPECT_EQ(modified.value(), id);
     EXPECT_EQ(level.getTotalQuantity(), 50);
-    EXPECT_EQ(order_manager->getQuantity(id).value(), 50);
+    EXPECT_EQ(order_manager->getView(id).value().quantity, 50);
     EXPECT_EQ(level.getOrders().size(), 1u);
 }
 
@@ -75,7 +75,7 @@ TEST_F(BookLevelTest, ModifyOrderMoreQtyIssuesNewId) {
     EXPECT_NE(modified.value(), id);
     EXPECT_FALSE(order_manager->valid(id));
     EXPECT_EQ(level.getTotalQuantity(), 150);
-    EXPECT_EQ(order_manager->getQuantity(modified.value()).value(), 150);
+    EXPECT_EQ(order_manager->getView(modified.value()).value().quantity, 150);
 
     ASSERT_EQ(level.getOrders().size(), 1u);
     EXPECT_EQ(level.getOrders().front(), modified.value());
@@ -145,7 +145,7 @@ TEST_F(BookLevelTest, FillOrdersPartial) {
     EXPECT_EQ(level.getTotalQuantity(), 3);
     EXPECT_FALSE(order_manager->valid(id1));
     ASSERT_TRUE(order_manager->valid(id2));
-    EXPECT_EQ(order_manager->getQuantity(id2).value(), 3);
+    EXPECT_EQ(order_manager->getView(id2).value().quantity, 3);
 
     ASSERT_EQ(level.getOrders().size(), 1u);
     EXPECT_EQ(level.getOrders().front(), id2);

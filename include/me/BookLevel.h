@@ -31,7 +31,7 @@ class BookLevel {
         std::vector<order_id_t> getAllOrders() const;
         int getPrice() const;
 
-        order_id_t addOrder(OrderSide side, OrderType type, int price, unsigned int quantity);
+        order_id_t addOrder(OrderSide side, OrderType type, int price, int quantity);
         std::optional<order_id_t> modifyOrder(order_id_t order, int new_quantity, int new_price);
         bool cancelOrder(order_id_t order_id);
         int fillOrders(int qty);

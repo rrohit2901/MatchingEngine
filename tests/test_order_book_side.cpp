@@ -37,16 +37,16 @@ TEST_F(OrderBookSideTest, AddOrder) {
     const order_id_t id1 = buy.addOrder(OrderType::LIMIT, 100, 10);
     EXPECT_TRUE(buy.isOrderIdExist(id1));
     EXPECT_EQ(buy.getLevels().size(), 1u);
-    EXPECT_EQ(order_manager->getSide(id1).value(), OrderSide::BUY);
-    EXPECT_EQ(order_manager->getType(id1).value(), OrderType::LIMIT);
-    EXPECT_EQ(order_manager->getPrice(id1).value(), 100);
-    EXPECT_EQ(order_manager->getQuantity(id1).value(), 10);
+    EXPECT_EQ(order_manager->getView(id1).value().side, OrderSide::BUY);
+    EXPECT_EQ(order_manager->getView(id1).value().type, OrderType::LIMIT);
+    EXPECT_EQ(order_manager->getView(id1).value().price, 100);
+    EXPECT_EQ(order_manager->getView(id1).value().quantity, 10);
 
     // A second price opens a second level.
     const order_id_t id2 = buy.addOrder(OrderType::LIMIT, 101, 10);
     EXPECT_TRUE(buy.isOrderIdExist(id2));
     EXPECT_EQ(buy.getLevels().size(), 2u);
-    EXPECT_EQ(order_manager->getPrice(id2).value(), 101);
+    EXPECT_EQ(order_manager->getView(id2).value().price, 101);
 }
 
 TEST_F(OrderBookSideTest, AddTwoOrdersAtSamePriceShareOneLevel) {
@@ -105,8 +105,8 @@ TEST_F(OrderBookSideTest, ModifyOrderSamePrice) {
     ASSERT_NE(modified, 0u); // 0 is the not-found sentinel
     EXPECT_TRUE(buy.isOrderIdExist(modified));
     EXPECT_EQ(buy.getLevels().size(), 1u);
-    EXPECT_EQ(order_manager->getPrice(modified).value(), 100);
-    EXPECT_EQ(order_manager->getQuantity(modified).value(), 50);
+    EXPECT_EQ(order_manager->getView(modified).value().price, 100);
+    EXPECT_EQ(order_manager->getView(modified).value().quantity, 50);
 }
 
 TEST_F(OrderBookSideTest, ModifyOrderNewPriceMovesLevel) {
@@ -121,7 +121,7 @@ TEST_F(OrderBookSideTest, ModifyOrderNewPriceMovesLevel) {
     const auto levels = buy.getLevels();
     ASSERT_EQ(levels.size(), 1u); // old level emptied and dropped
     EXPECT_EQ(levels.front()->getPrice(), 101);
-    EXPECT_EQ(order_manager->getQuantity(modified).value(), 50);
+    EXPECT_EQ(order_manager->getView(modified).value().quantity, 50);
 }
 
 TEST_F(OrderBookSideTest, ModifyUnknownOrderReturnsZero) {
@@ -175,7 +175,7 @@ TEST_F(OrderBookSideTest, FillOrdersConsumesBestPriceFirst) {
     EXPECT_EQ(sell.fillOrders(100, 5), 0);
     EXPECT_FALSE(order_manager->valid(best));
     ASSERT_TRUE(order_manager->valid(worse));
-    EXPECT_EQ(order_manager->getQuantity(worse).value(), 5);
+    EXPECT_EQ(order_manager->getView(worse).value().quantity, 5);
 }
 
 TEST_F(OrderBookSideTest, FillOrdersReturnsUnfilledRemainder) {
@@ -193,5 +193,5 @@ TEST_F(OrderBookSideTest, FillOrdersSkipsLevelsThatDoNotCross) {
     // A buyer at 100 cannot reach a 101 ask; nothing fills.
     EXPECT_EQ(sell.fillOrders(100, 5), 5);
     ASSERT_TRUE(order_manager->valid(ask));
-    EXPECT_EQ(order_manager->getQuantity(ask).value(), 5);
+    EXPECT_EQ(order_manager->getView(ask).value().quantity, 5);
 }

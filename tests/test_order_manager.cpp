@@ -7,19 +7,38 @@
 // OrderManager is the single owner of every Order. Everything above it holds
 // order ids and asks the manager for state, so the contract under test is:
 //   - ids are unique and never reused;
-//   - an order that is cancelled or fully filled is ERASED, after which every
-//     accessor reports nullopt / false rather than stale data;
+//   - an order that is cancelled, fully filled, or modified to zero quantity is
+//     ERASED, after which getView() reports nullopt rather than stale data;
 //   - operations on an unknown or dead id fail instead of throwing.
+//
+// State is read through getView(), which costs one hash lookup for all fields.
 
 TEST(OrderManager, AddOrderExposesItsFields) {
     OrderManager manager;
     const order_id_t id = manager.add_order(OrderSide::BUY, OrderType::LIMIT, 10, 100);
 
-    EXPECT_TRUE(manager.valid(id));
-    EXPECT_EQ(manager.getSide(id).value(), OrderSide::BUY);
-    EXPECT_EQ(manager.getType(id).value(), OrderType::LIMIT);
-    EXPECT_EQ(manager.getQuantity(id).value(), 10);
-    EXPECT_EQ(manager.getPrice(id).value(), 100);
+    ASSERT_TRUE(manager.valid(id));
+    const auto view = manager.getView(id);
+    ASSERT_TRUE(view.has_value());
+    EXPECT_EQ(view->orderId, id);
+    EXPECT_EQ(view->side, OrderSide::BUY);
+    EXPECT_EQ(view->type, OrderType::LIMIT);
+    EXPECT_EQ(view->quantity, 10);
+    EXPECT_EQ(view->price, 100);
+}
+
+TEST(OrderManager, ViewIsASnapshotNotALiveHandle) {
+    OrderManager manager;
+    const order_id_t id = manager.add_order(OrderSide::BUY, OrderType::LIMIT, 10, 100);
+
+    const auto before = manager.getView(id).value();
+    ASSERT_TRUE(manager.modify_order(id, 4, 101));
+
+    // The copy taken earlier must not track the later modification.
+    EXPECT_EQ(before.quantity, 10);
+    EXPECT_EQ(before.price, 100);
+    EXPECT_EQ(manager.getView(id).value().quantity, 4);
+    EXPECT_EQ(manager.getView(id).value().price, 101);
 }
 
 TEST(OrderManager, AddOrderIssuesUniqueIds) {
@@ -42,13 +61,10 @@ TEST(OrderManager, IdsAreNotReusedAfterCancel) {
     EXPECT_NE(second, first);
 }
 
-TEST(OrderManager, AccessorsOnUnknownIdReturnNullopt) {
+TEST(OrderManager, ViewOfUnknownIdIsNullopt) {
     OrderManager manager;
     EXPECT_FALSE(manager.valid(9999));
-    EXPECT_FALSE(manager.getSide(9999).has_value());
-    EXPECT_FALSE(manager.getType(9999).has_value());
-    EXPECT_FALSE(manager.getPrice(9999).has_value());
-    EXPECT_FALSE(manager.getQuantity(9999).has_value());
+    EXPECT_FALSE(manager.getView(9999).has_value());
 }
 
 TEST(OrderManager, CancelOrderErasesIt) {
@@ -57,8 +73,7 @@ TEST(OrderManager, CancelOrderErasesIt) {
 
     EXPECT_TRUE(manager.cancel_order(id));
     EXPECT_FALSE(manager.valid(id));
-    EXPECT_FALSE(manager.getSide(id).has_value());
-    EXPECT_FALSE(manager.getQuantity(id).has_value());
+    EXPECT_FALSE(manager.getView(id).has_value());
 }
 
 TEST(OrderManager, CancelOrderTwiceFails) {
@@ -79,21 +94,27 @@ TEST(OrderManager, ModifyOrderUpdatesQuantityAndPrice) {
     const order_id_t id = manager.add_order(OrderSide::BUY, OrderType::LIMIT, 10, 100);
 
     EXPECT_TRUE(manager.modify_order(id, 25, 101));
-    EXPECT_EQ(manager.getQuantity(id).value(), 25);
-    EXPECT_EQ(manager.getPrice(id).value(), 101);
+    const auto view = manager.getView(id);
+    ASSERT_TRUE(view.has_value());
+    EXPECT_EQ(view->quantity, 25);
+    EXPECT_EQ(view->price, 101);
     // Side and type are not modifiable through this call.
-    EXPECT_EQ(manager.getSide(id).value(), OrderSide::BUY);
-    EXPECT_EQ(manager.getType(id).value(), OrderType::LIMIT);
+    EXPECT_EQ(view->side, OrderSide::BUY);
+    EXPECT_EQ(view->type, OrderType::LIMIT);
 }
 
-TEST(OrderManager, ModifyToZeroQuantityRetiresOrder) {
+TEST(OrderManager, ModifyToZeroQuantityRetiresAndErasesOrder) {
     OrderManager manager;
     const order_id_t id = manager.add_order(OrderSide::BUY, OrderType::LIMIT, 10, 100);
 
     EXPECT_TRUE(manager.modify_order(id, 0, 100));
-    // A zero-quantity order counts as fulfilled, so it stops being valid.
+    // A zero-quantity order counts as fulfilled, so it stops being valid AND is
+    // dropped from the map — the same treatment cancel and fulfill give.
     EXPECT_FALSE(manager.valid(id));
-    EXPECT_FALSE(manager.getQuantity(id).has_value());
+    EXPECT_FALSE(manager.getView(id).has_value());
+    // Erased, not merely tombstoned: a second modify finds nothing to act on.
+    EXPECT_FALSE(manager.modify_order(id, 5, 100));
+    EXPECT_FALSE(manager.cancel_order(id));
 }
 
 TEST(OrderManager, ModifyUnknownOrCancelledOrderFails) {
@@ -111,8 +132,8 @@ TEST(OrderManager, FulfillPartiallyLeavesOrderResting) {
 
     // 4 units of the incoming 4 are absorbed, so nothing is left over.
     EXPECT_EQ(manager.fulfill_order(id, 4), 0);
-    EXPECT_TRUE(manager.valid(id));
-    EXPECT_EQ(manager.getQuantity(id).value(), 6);
+    ASSERT_TRUE(manager.valid(id));
+    EXPECT_EQ(manager.getView(id).value().quantity, 6);
 }
 
 TEST(OrderManager, FulfillExactlyErasesOrder) {
@@ -121,7 +142,7 @@ TEST(OrderManager, FulfillExactlyErasesOrder) {
 
     EXPECT_EQ(manager.fulfill_order(id, 10), 0);
     EXPECT_FALSE(manager.valid(id));
-    EXPECT_FALSE(manager.getQuantity(id).has_value());
+    EXPECT_FALSE(manager.getView(id).has_value());
 }
 
 TEST(OrderManager, FulfillReturnsUnabsorbedRemainder) {
@@ -156,8 +177,9 @@ TEST(OrderManager, OrdersAreIndependent) {
     EXPECT_FALSE(manager.valid(buy));
 
     // Cancelling one order must not disturb any other.
-    ASSERT_TRUE(manager.valid(sell));
-    EXPECT_EQ(manager.getSide(sell).value(), OrderSide::SELL);
-    EXPECT_EQ(manager.getQuantity(sell).value(), 5);
-    EXPECT_EQ(manager.getPrice(sell).value(), 101);
+    const auto view = manager.getView(sell);
+    ASSERT_TRUE(view.has_value());
+    EXPECT_EQ(view->side, OrderSide::SELL);
+    EXPECT_EQ(view->quantity, 5);
+    EXPECT_EQ(view->price, 101);
 }

@@ -63,20 +63,30 @@ int OrderBook::fillOrders(OrderSide side, int target_price, int qty) {
     return sellLevels.fillOrders(target_price, qty);
 }
 
+std::optional<OrderView> OrderBook::getOrderView(order_id_t order_id) const {
+    return order_manager->getView(order_id);
+}
+
+// The single-field accessors below stay for callers that genuinely want one
+// field. Anything reading two or more should use getOrderView().
 std::optional<OrderSide> OrderBook::getOrderSide(order_id_t order_id) const {
-    return order_manager->getSide(order_id);
+    if (const auto order = order_manager->getView(order_id)) return order->side;
+    return std::nullopt;
 }
 
 std::optional<OrderType> OrderBook::getOrderType(order_id_t order_id) const {
-    return order_manager->getType(order_id);
+    if (const auto order = order_manager->getView(order_id)) return order->type;
+    return std::nullopt;
 }
 
 std::optional<int> OrderBook::getOrderPrice(order_id_t order_id) const {
-    return order_manager->getPrice(order_id);
+    if (const auto order = order_manager->getView(order_id)) return order->price;
+    return std::nullopt;
 }
 
 std::optional<int> OrderBook::getOrderQuantity(order_id_t order_id) const {
-    return order_manager->getQuantity(order_id);
+    if (const auto order = order_manager->getView(order_id)) return order->quantity;
+    return std::nullopt;
 }
 
 bool OrderBook::IsOrderValid(order_id_t order_id) const {

@@ -15,14 +15,15 @@ class OrderManager{
         OrderManager(const OrderManager&) = delete;
         OrderManager& operator=(const OrderManager&) = delete;
 
-        order_id_t add_order(OrderSide order_side, OrderType order_type, unsigned int qty, unsigned int price);
+        order_id_t add_order(OrderSide order_side, OrderType order_type, int qty, int price);
         bool cancel_order(order_id_t order_id);
-        bool modify_order(order_id_t order_id, unsigned int new_qty, unsigned int new_price);
+        bool modify_order(order_id_t order_id, int new_qty, int new_price);
         int fulfill_order(order_id_t order_id, int qty);
 
-        std::optional<OrderSide> getSide(order_id_t order_id) const;
-        std::optional<OrderType> getType(order_id_t order_id) const;
-        std::optional<int> getPrice(order_id_t order_id) const;
-        std::optional<int> getQuantity(order_id_t order_id) const;
+        // Single lookup for every field a caller needs. Prefer this over asking
+        // for fields one at a time — the per-field accessors were removed so the
+        // one-lookup-per-field pattern cannot creep back in.
+        // Returns nullopt when the id is unknown or the order is no longer live.
+        std::optional<OrderView> getView(order_id_t order_id) const;
         bool valid(order_id_t order_id) const;
 };

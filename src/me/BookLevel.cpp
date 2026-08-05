@@ -31,7 +31,7 @@ int BookLevel::getPrice() const {
     return price;
 }
 
-order_id_t BookLevel::addOrder(OrderSide side, OrderType type, int price, unsigned int quantity) {
+order_id_t BookLevel::addOrder(OrderSide side, OrderType type, int price, int quantity) {
     order_id_t order_id = order_manager->add_order(side, type, quantity, price);
     total_quantity += quantity;
     total_orders += 1;
@@ -41,15 +41,19 @@ order_id_t BookLevel::addOrder(OrderSide side, OrderType type, int price, unsign
 }
 
 std::optional<order_id_t> BookLevel::modifyOrder(order_id_t order_id, int new_quantity, int new_price) {
-    if (!order_manager->valid(order_id)) return std::nullopt;
+    // One lookup covers the validity check and every field used below.
+    const auto order = order_manager->getView(order_id);
+    if (!order) return std::nullopt;
 
-    unsigned int current_quantity = order_manager->getQuantity(order_id).value();
+    // Signed comparison: current_quantity used to be unsigned, which turned a
+    // negative new_quantity into a huge value and took the wrong branch.
+    const int current_quantity = order->quantity;
     if(new_quantity <= current_quantity) {
         total_quantity -= (current_quantity - new_quantity);
         order_manager->modify_order(order_id, new_quantity, new_price);
         return order_id;
     }
-    order_id_t modified_order_id = addOrder(order_manager->getSide(order_id).value(), order_manager->getType(order_id).value(), new_price, new_quantity);
+    order_id_t modified_order_id = addOrder(order->side, order->type, new_price, new_quantity);
     // Return value is ignored because here we know order_id corresponds to a valid order.
     cancelOrder(order_id);
 
@@ -60,8 +64,9 @@ std::optional<order_id_t> BookLevel::modifyOrder(order_id_t order_id, int new_qu
 }
 
 bool BookLevel::cancelOrder(order_id_t order_id) {
-    if (!order_manager->valid(order_id)) return false;
-    total_quantity -= order_manager->getQuantity(order_id).value();
+    const auto order = order_manager->getView(order_id);
+    if (!order) return false;
+    total_quantity -= order->quantity;
     valid_orders -= 1;
 
     order_manager->cancel_order(order_id);
@@ -92,4 +97,5 @@ void BookLevel::compact() {
         valid_orders.push_back(order_id);
     }
     orders = std::move(valid_orders);
+    total_orders = this->valid_orders = orders.size();
 }

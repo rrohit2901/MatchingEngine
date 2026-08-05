@@ -37,8 +37,9 @@ class OrderBookSide {
             return levels;
         }
 
-        bool isOrderIdExist(int orderId) const {
-            return order_manager->valid(orderId) && (order_manager->getSide(orderId)==side);
+        bool isOrderIdExist(order_id_t orderId) const {
+            const auto order = order_manager->getView(orderId);
+            return order.has_value() && order->side==side;
         }
 
         std::optional<const BookLevel> getLevel(int price) const {
@@ -67,10 +68,12 @@ class OrderBookSide {
         }
 
         bool cancelOrder(order_id_t orderId) {
-            if (!isOrderIdExist(orderId)) {
+            // One lookup replaces isOrderIdExist()'s check plus the price fetch.
+            const auto order = order_manager->getView(orderId);
+            if (!order || order->side!=side) {
                 return false;
             }
-            int order_price = order_manager->getPrice(orderId).value();
+            const int order_price = order->price;
             std::shared_ptr<BookLevel> book_level = priceLevels[order_price];
             bool is_cancelled = book_level->cancelOrder(orderId);
 
@@ -80,19 +83,21 @@ class OrderBookSide {
             return is_cancelled;
         }
 
-        order_id_t modifyOrder(int orderId, int newQuantity, int newPrice) {
-            if (!isOrderIdExist(orderId)) {
-                return false;
+        order_id_t modifyOrder(order_id_t orderId, int newQuantity, int newPrice) {
+            // Was five lookups: isOrderIdExist (valid + side), price twice, type.
+            const auto order = order_manager->getView(orderId);
+            if (!order || order->side!=side) {
+                return 0;
             }
-            int order_price = order_manager->getPrice(orderId).value();
+            const int order_price = order->price;
             std::shared_ptr<BookLevel> book_level = priceLevels[order_price];
 
             order_id_t modifiedOrder;
 
-            if(newPrice == order_manager->getPrice(orderId)) {
+            if(newPrice == order_price) {
                 modifiedOrder = book_level->modifyOrder(orderId, newQuantity, newPrice).value();
             } else {
-                modifiedOrder = addOrder(order_manager->getType(orderId).value(), newPrice, newQuantity);
+                modifiedOrder = addOrder(order->type, newPrice, newQuantity);
                 // Return value is not relevant since we know that orderId is valid.
                 cancelOrder(orderId);
             }
