@@ -8,6 +8,13 @@
 //
 // Prices are plain ints — there is no PRICE_MULTIPLIER and no floating point, so
 // a price goes in and comes back out unchanged.
+//
+// fillOrders() reports each fill as a TradeEvent and needs the incoming order's
+// id; OrderBook never looks that id up, so a standalone one works here.
+
+namespace {
+constexpr order_id_t kAggressor = 9999;
+} // namespace
 
 TEST(OrderBook, AddOrder) {
     OrderBook book;
@@ -123,12 +130,25 @@ TEST(OrderBook, FillOrders) {
     const order_id_t ask = book.addOrder(100, 10, OrderType::LIMIT, OrderSide::SELL);
 
     // A buyer paying 100 consumes the resting ask outright.
-    EXPECT_EQ(book.fillOrders(OrderSide::SELL, 100, 10), 0);
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(book.fillOrders(OrderSide::SELL, 100, 10, trades, kAggressor), 0);
     EXPECT_FALSE(book.IsOrderValid(ask));
+
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].sell_id, ask);
+    EXPECT_EQ(trades[0].buy_id, kAggressor);
+    EXPECT_EQ(trades[0].trade_qty, 10);
+    EXPECT_EQ(trades[0].trade_price, 100);
 }
 
 TEST(OrderBook, FillOrdersReturnsUnfilledRemainder) {
     OrderBook book;
     book.addOrder(100, 5, OrderType::LIMIT, OrderSide::SELL);
-    EXPECT_EQ(book.fillOrders(OrderSide::SELL, 100, 8), 3);
+
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(book.fillOrders(OrderSide::SELL, 100, 8, trades, kAggressor), 3);
+
+    // Only the 5 that traded are reported; the 3 unfilled are not a trade.
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].trade_qty, 5);
 }

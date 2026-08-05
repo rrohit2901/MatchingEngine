@@ -12,6 +12,10 @@
 
 namespace {
 
+// fillOrders() reports each fill as a TradeEvent and needs the incoming order's
+// id; OrderBookSide never looks that id up, so a standalone one works here.
+constexpr order_id_t kAggressor = 9999;
+
 class OrderBookSideTest : public ::testing::Test {
   protected:
     std::shared_ptr<OrderManager> order_manager{std::make_shared<OrderManager>()};
@@ -172,10 +176,17 @@ TEST_F(OrderBookSideTest, FillOrdersConsumesBestPriceFirst) {
     const order_id_t worse = sell.addOrder(OrderType::LIMIT, 101, 5);
 
     // A buyer willing to pay 100 can only reach the 100 level.
-    EXPECT_EQ(sell.fillOrders(100, 5), 0);
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(sell.fillOrders(100, 5, trades, kAggressor), 0);
     EXPECT_FALSE(order_manager->valid(best));
     ASSERT_TRUE(order_manager->valid(worse));
     EXPECT_EQ(order_manager->getView(worse).value().quantity, 5);
+
+    // Only the level that crossed produced a trade.
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].sell_id, best);
+    EXPECT_EQ(trades[0].trade_price, 100);
+    EXPECT_EQ(trades[0].trade_qty, 5);
 }
 
 TEST_F(OrderBookSideTest, FillOrdersReturnsUnfilledRemainder) {
@@ -183,7 +194,11 @@ TEST_F(OrderBookSideTest, FillOrdersReturnsUnfilledRemainder) {
     sell.addOrder(OrderType::LIMIT, 100, 5);
 
     // Only 5 units are reachable at 100, so 5 of the requested 10 go unfilled.
-    EXPECT_EQ(sell.fillOrders(100, 10), 5);
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(sell.fillOrders(100, 10, trades, kAggressor), 5);
+
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].trade_qty, 5);
 }
 
 TEST_F(OrderBookSideTest, FillOrdersSkipsLevelsThatDoNotCross) {
@@ -191,7 +206,28 @@ TEST_F(OrderBookSideTest, FillOrdersSkipsLevelsThatDoNotCross) {
     const order_id_t ask = sell.addOrder(OrderType::LIMIT, 101, 5);
 
     // A buyer at 100 cannot reach a 101 ask; nothing fills.
-    EXPECT_EQ(sell.fillOrders(100, 5), 5);
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(sell.fillOrders(100, 5, trades, kAggressor), 5);
     ASSERT_TRUE(order_manager->valid(ask));
     EXPECT_EQ(order_manager->getView(ask).value().quantity, 5);
+
+    EXPECT_TRUE(trades.empty());
+}
+
+TEST_F(OrderBookSideTest, FillOrdersSweepsMultipleLevels) {
+    OrderBookSide<OrderSide::SELL> sell{order_manager};
+    const order_id_t best = sell.addOrder(OrderType::LIMIT, 100, 5);
+    const order_id_t worse = sell.addOrder(OrderType::LIMIT, 101, 5);
+
+    // 8 lots clear the 100 level and take 3 from the 101 level.
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(sell.fillOrders(101, 8, trades, kAggressor), 0);
+
+    ASSERT_EQ(trades.size(), 2u);
+    EXPECT_EQ(trades[0].sell_id, best);   // best price trades first
+    EXPECT_EQ(trades[0].trade_price, 100);
+    EXPECT_EQ(trades[0].trade_qty, 5);
+    EXPECT_EQ(trades[1].sell_id, worse);
+    EXPECT_EQ(trades[1].trade_price, 101); // each trade carries its own level price
+    EXPECT_EQ(trades[1].trade_qty, 3);
 }

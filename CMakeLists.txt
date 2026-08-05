@@ -47,7 +47,10 @@ target_compile_options(project_options INTERFACE
 # Dependencies via FetchContent (no system installs required)
 # -----------------------------------------------------------------------------
 include(FetchContent)
- 
+
+# The logger runs on its own thread and LockQueue uses std::mutex/condition_variable.
+find_package(Threads REQUIRED)
+
 # GoogleTest
 FetchContent_Declare(
     googletest
@@ -82,7 +85,14 @@ target_link_libraries(me_core PRIVATE project_warnings project_options)
 # Main executable
 # -----------------------------------------------------------------------------
 add_executable(me_main src/main.cpp)
-target_link_libraries(me_main PRIVATE me_core project_warnings project_options)
+target_link_libraries(me_main PRIVATE
+    me_core
+    me_ds_lock          # LockQueue
+    me_event_handler    # Logger
+    Threads::Threads
+    project_warnings
+    project_options
+)
  
 # -----------------------------------------------------------------------------
 # Lock-based data structures (practice) — header-only.
@@ -93,6 +103,13 @@ target_link_libraries(me_main PRIVATE me_core project_warnings project_options)
 # -----------------------------------------------------------------------------
 add_library(me_ds_lock INTERFACE)
 target_include_directories(me_ds_lock INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include/data_structures)
+
+# -----------------------------------------------------------------------------
+# Event handler (Logger) — header-only, consumes the event queue off the hot path.
+# -----------------------------------------------------------------------------
+add_library(me_event_handler INTERFACE)
+target_include_directories(me_event_handler INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include/event_handler)
+target_link_libraries(me_event_handler INTERFACE me_core Threads::Threads)
 
 # -----------------------------------------------------------------------------
 # Tests

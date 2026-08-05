@@ -78,24 +78,33 @@ bool BookLevel::cancelOrder(order_id_t order_id) {
 int BookLevel::fillOrders(int qty, std::vector<TradeEvent>& filled_orders, order_id_t counter_order_id) {
     int rem_qty = qty;
     for(order_id_t order_id: orders) {
+        // Nothing left to match against this level's remaining orders.
+        if(rem_qty==0) break;
+
         const auto order = order_manager->getView(order_id);
-        if(!order || rem_qty==0) continue;
+        if(!order) continue;
+
         rem_qty = order_manager->fulfill_order(order_id, rem_qty);
 
         const auto post_match_order = order_manager->getView(order_id);
-        int filled_qty, price = order->price;;
+        const int price = order->price;
+
+        int filled_qty = 0;
+        if(!post_match_order) {
+            // The resting order is gone, so all of it traded.
+            valid_orders -= 1;
+            filled_qty = order->quantity;
+        }
+        else{
+            filled_qty = order->quantity - post_match_order->quantity;
+        }
+        if(filled_qty==0) continue;
+
         // 0 is a transient value for order ID.
         order_id_t buy_order_id = 0, sell_order_id = 0;
         if(order->side==OrderSide::BUY) {buy_order_id = order->orderId; sell_order_id = counter_order_id;}
         else {sell_order_id = order->orderId; buy_order_id = counter_order_id;}
 
-        if(!post_match_order) {
-            valid_orders -= 1;
-            filled_qty = order->quantity;
-        }
-        else{
-            filled_qty -= post_match_order->quantity;
-        }
         filled_orders.emplace_back(buy_order_id, sell_order_id, price, filled_qty);
     }
     total_quantity = std::max(0, total_quantity - qty);

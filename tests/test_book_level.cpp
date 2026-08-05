@@ -12,6 +12,11 @@
 
 namespace {
 
+// fillOrders() reports each fill as a TradeEvent and needs the id of the
+// incoming order it is matching against. BookLevel never looks the id up, so
+// tests can use a standalone one.
+constexpr order_id_t kAggressor = 9999;
+
 class BookLevelTest : public ::testing::Test {
   protected:
     std::shared_ptr<OrderManager> order_manager{std::make_shared<OrderManager>()};
@@ -141,7 +146,8 @@ TEST_F(BookLevelTest, FillOrdersPartial) {
     const order_id_t id2 = level.addOrder(OrderSide::SELL, OrderType::LIMIT, 100, 5);
 
     // 12 units consume id1 entirely and 2 of id2's 5.
-    EXPECT_EQ(level.fillOrders(12), 0);
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(level.fillOrders(12, trades, kAggressor), 0);
     EXPECT_EQ(level.getTotalQuantity(), 3);
     EXPECT_FALSE(order_manager->valid(id1));
     ASSERT_TRUE(order_manager->valid(id2));
@@ -149,16 +155,29 @@ TEST_F(BookLevelTest, FillOrdersPartial) {
 
     ASSERT_EQ(level.getOrders().size(), 1u);
     EXPECT_EQ(level.getOrders().front(), id2);
+
+    // One trade per resting order touched, in the order they were consumed.
+    ASSERT_EQ(trades.size(), 2u);
+    EXPECT_EQ(trades[0].sell_id, id1);       // resting side is SELL here
+    EXPECT_EQ(trades[0].buy_id, kAggressor); // incoming side takes the other slot
+    EXPECT_EQ(trades[0].trade_qty, 10);
+    EXPECT_EQ(trades[0].trade_price, 100);
+    EXPECT_EQ(trades[1].sell_id, id2);
+    EXPECT_EQ(trades[1].trade_qty, 2);       // only the part that actually traded
 }
 
 TEST_F(BookLevelTest, FillOrdersExactlyEmptiesLevel) {
     BookLevel level(order_manager, 100);
     const order_id_t id = level.addOrder(OrderSide::SELL, OrderType::LIMIT, 100, 10);
 
-    EXPECT_EQ(level.fillOrders(10), 0);
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(level.fillOrders(10, trades, kAggressor), 0);
     EXPECT_EQ(level.getTotalQuantity(), 0);
     EXPECT_FALSE(order_manager->valid(id));
     EXPECT_TRUE(level.getOrders().empty());
+
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].trade_qty, 10);
 }
 
 TEST_F(BookLevelTest, FillOrdersReturnsUnfilledRemainder) {
@@ -166,7 +185,33 @@ TEST_F(BookLevelTest, FillOrdersReturnsUnfilledRemainder) {
     level.addOrder(OrderSide::SELL, OrderType::LIMIT, 100, 10);
 
     // Only 10 units are resting, so 5 of the requested 15 go unfilled.
-    EXPECT_EQ(level.fillOrders(15), 5);
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(level.fillOrders(15, trades, kAggressor), 5);
     EXPECT_EQ(level.getTotalQuantity(), 0);
     EXPECT_TRUE(level.getOrders().empty());
+
+    // The unfilled remainder is not a trade.
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].trade_qty, 10);
+}
+
+TEST_F(BookLevelTest, FillOrdersOnEmptyLevelReportsNoTrades) {
+    BookLevel level(order_manager, 100);
+
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(level.fillOrders(10, trades, kAggressor), 10);
+    EXPECT_TRUE(trades.empty());
+}
+
+TEST_F(BookLevelTest, FillOrdersReportsBuyRestingOrderOnTheBuySlot) {
+    BookLevel level(order_manager, 100);
+    const order_id_t id = level.addOrder(OrderSide::BUY, OrderType::LIMIT, 100, 10);
+
+    std::vector<TradeEvent> trades;
+    EXPECT_EQ(level.fillOrders(10, trades, kAggressor), 0);
+
+    // Mirror of the SELL case: the resting buy owns buy_id, the aggressor sell_id.
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].buy_id, id);
+    EXPECT_EQ(trades[0].sell_id, kAggressor);
 }

@@ -41,6 +41,8 @@ add_test(NAME order_book_tests COMMAND test_order_book)
 add_executable(test_matcher test_matcher.cpp)
 target_link_libraries(test_matcher PRIVATE
     me_core
+    me_ds_lock          # LockQueue for the event container
+    Threads::Threads
     GTest::gtest_main
     project_warnings
     project_options
@@ -59,6 +61,8 @@ add_test(NAME order_manager_tests COMMAND test_order_manager)
 add_executable(test_matching_engine test_matching_engine.cpp)
 target_link_libraries(test_matching_engine PRIVATE
     me_core
+    me_ds_lock          # LockQueue for the event container
+    Threads::Threads
     GTest::gtest_main
     project_warnings
     project_options

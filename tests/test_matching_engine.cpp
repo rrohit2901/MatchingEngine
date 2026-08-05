@@ -1,18 +1,25 @@
 #include "MatchingEngine.h"
+#include "lock_queue.h"
 
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <typeinfo>
 #include <vector>
 
 // MatchingEngine is OrderBook plus automatic matching: every addOrder and
 // modifyOrder runs the Matcher, so a crossing order trades on arrival instead of
 // resting. It exposes no per-order accessors, so these tests observe the book
 // through the level views.
+//
+// It also publishes an event per operation into the container it is constructed
+// with. Tests hand it a real LockQueue and drain that queue to assert on what
+// was published; nothing here writes to a file.
 
 namespace {
 
 using Levels = std::vector<std::shared_ptr<BookLevel>>;
+using EventQueue = LockQueue<std::unique_ptr<Event>>;
 
 int restingQuantity(const Levels& levels) {
     int total = 0;
@@ -30,10 +37,43 @@ std::size_t restingOrders(const Levels& levels) {
     return count;
 }
 
+class MatchingEngineTest : public ::testing::Test {
+  protected:
+    std::shared_ptr<EventQueue> queue{std::make_shared<EventQueue>()};
+    MatchingEngine<LockQueue> me{queue};
+
+    // Pops everything published so far. The engine emits SESSION_OPEN from its
+    // constructor, so that is always the first entry.
+    std::vector<std::unique_ptr<Event>> drainEvents() {
+        std::vector<std::unique_ptr<Event>> events;
+        while (auto popped = queue->try_pop()) {
+            events.push_back(std::move(*popped));
+        }
+        return events;
+    }
+
+    std::vector<EventTypes> drainEventTypes() {
+        std::vector<EventTypes> types;
+        for (const auto& event : drainEvents()) {
+            types.push_back(event->event_type);
+        }
+        return types;
+    }
+
+    std::vector<TradeEvent> drainTrades() {
+        std::vector<TradeEvent> trades;
+        for (const auto& event : drainEvents()) {
+            if (auto* trade = dynamic_cast<TradeEvent*>(event.get())) {
+                trades.push_back(*trade);
+            }
+        }
+        return trades;
+    }
+};
+
 } // namespace
 
-TEST(MatchingEngine, EmptyBook) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, EmptyBook) {
     EXPECT_TRUE(me.getBuySideView(5).empty());
     EXPECT_TRUE(me.getSellSideView(5).empty());
 
@@ -42,8 +82,7 @@ TEST(MatchingEngine, EmptyBook) {
     EXPECT_TRUE(asks.empty());
 }
 
-TEST(MatchingEngine, NonCrossingOrdersRest) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, NonCrossingOrdersRest) {
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
     me.addOrder(101, 5, OrderType::LIMIT, OrderSide::SELL);
 
@@ -58,8 +97,7 @@ TEST(MatchingEngine, NonCrossingOrdersRest) {
     EXPECT_EQ(asks.front()->getTotalQuantity(), 5);
 }
 
-TEST(MatchingEngine, CrossingOrderTradesOnArrival) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, CrossingOrderTradesOnArrival) {
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
 
@@ -70,8 +108,7 @@ TEST(MatchingEngine, CrossingOrderTradesOnArrival) {
     EXPECT_EQ(restingOrders(me.getSellSideView(5)), 0u);
 }
 
-TEST(MatchingEngine, PartialFillLeavesRemainderResting) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, PartialFillLeavesRemainderResting) {
     me.addOrder(100, 4, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
 
@@ -81,8 +118,7 @@ TEST(MatchingEngine, PartialFillLeavesRemainderResting) {
     EXPECT_EQ(restingOrders(me.getBuySideView(5)), 1u);
 }
 
-TEST(MatchingEngine, RestingOrderAbsorbsSmallerAggressor) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, RestingOrderAbsorbsSmallerAggressor) {
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(100, 4, OrderType::LIMIT, OrderSide::BUY);
 
@@ -91,8 +127,7 @@ TEST(MatchingEngine, RestingOrderAbsorbsSmallerAggressor) {
     EXPECT_EQ(restingQuantity(me.getSellSideView(5)), 6);
 }
 
-TEST(MatchingEngine, IncomingSellCrossesRestingBid) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, IncomingSellCrossesRestingBid) {
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::SELL);
 
@@ -100,8 +135,7 @@ TEST(MatchingEngine, IncomingSellCrossesRestingBid) {
     EXPECT_EQ(restingQuantity(me.getSellSideView(5)), 0);
 }
 
-TEST(MatchingEngine, OrderDoesNotTradeThroughItsLimit) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, OrderDoesNotTradeThroughItsLimit) {
     me.addOrder(102, 10, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
 
@@ -110,8 +144,7 @@ TEST(MatchingEngine, OrderDoesNotTradeThroughItsLimit) {
     EXPECT_EQ(restingQuantity(me.getSellSideView(5)), 10);
 }
 
-TEST(MatchingEngine, AggressorSweepsBestPriceFirst) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, AggressorSweepsBestPriceFirst) {
     me.addOrder(102, 5, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(100, 5, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(102, 5, OrderType::LIMIT, OrderSide::BUY);
@@ -126,8 +159,7 @@ TEST(MatchingEngine, AggressorSweepsBestPriceFirst) {
     EXPECT_EQ(asks.back()->getPrice(), 102);
 }
 
-TEST(MatchingEngine, AggressorSweepsMultipleLevels) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, AggressorSweepsMultipleLevels) {
     me.addOrder(100, 5, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(101, 5, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(101, 8, OrderType::LIMIT, OrderSide::BUY);
@@ -137,8 +169,7 @@ TEST(MatchingEngine, AggressorSweepsMultipleLevels) {
     EXPECT_EQ(restingQuantity(me.getSellSideView(5)), 2);
 }
 
-TEST(MatchingEngine, CancelOrder) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, CancelOrder) {
     const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
 
     EXPECT_TRUE(me.cancelOrder(id));
@@ -146,13 +177,11 @@ TEST(MatchingEngine, CancelOrder) {
     EXPECT_FALSE(me.cancelOrder(id)); // already gone
 }
 
-TEST(MatchingEngine, CancelUnknownOrderFails) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, CancelUnknownOrderFails) {
     EXPECT_FALSE(me.cancelOrder(9999));
 }
 
-TEST(MatchingEngine, ModifyOrderRequotesToNewPrice) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, ModifyOrderRequotesToNewPrice) {
     const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
 
     const auto requoted = me.modifyOrder(id, 10, 99, OrderSide::BUY, OrderType::LIMIT);
@@ -164,13 +193,11 @@ TEST(MatchingEngine, ModifyOrderRequotesToNewPrice) {
     EXPECT_EQ(bids.front()->getTotalQuantity(), 10);
 }
 
-TEST(MatchingEngine, ModifyUnknownOrderReturnsNullopt) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, ModifyUnknownOrderReturnsNullopt) {
     EXPECT_FALSE(me.modifyOrder(9999, 10, 100, OrderSide::BUY, OrderType::LIMIT).has_value());
 }
 
-TEST(MatchingEngine, ModifyIntoACrossTrades) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, ModifyIntoACrossTrades) {
     me.addOrder(101, 10, OrderType::LIMIT, OrderSide::SELL);
     const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
     ASSERT_EQ(restingQuantity(me.getSellSideView(5)), 10); // no cross yet
@@ -182,8 +209,7 @@ TEST(MatchingEngine, ModifyIntoACrossTrades) {
     EXPECT_EQ(restingQuantity(me.getBuySideView(5)), 0);
 }
 
-TEST(MatchingEngine, BookViewIsPriceOrderedAndCapped) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, BookViewIsPriceOrderedAndCapped) {
     me.addOrder(98, 1, OrderType::LIMIT, OrderSide::BUY);
     me.addOrder(100, 1, OrderType::LIMIT, OrderSide::BUY);
     me.addOrder(99, 1, OrderType::LIMIT, OrderSide::BUY);
@@ -205,8 +231,7 @@ TEST(MatchingEngine, BookViewIsPriceOrderedAndCapped) {
     EXPECT_EQ(me.getSellSideView(1).size(), 1u);
 }
 
-TEST(MatchingEngine, FullyFilledAggressorLeavesNoEmptyLevel) {
-    MatchingEngine me;
+TEST_F(MatchingEngineTest, FullyFilledAggressorLeavesNoEmptyLevel) {
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
 
@@ -214,4 +239,112 @@ TEST(MatchingEngine, FullyFilledAggressorLeavesNoEmptyLevel) {
     // view, otherwise getOrderBookView(n) reports phantom depth.
     EXPECT_TRUE(me.getSellSideView(5).empty());
     EXPECT_TRUE(me.getBuySideView(5).empty());
+}
+
+// --- event publishing ------------------------------------------------------
+// The engine's whole reason for holding a queue: every operation must leave a
+// record for the logger thread, without the engine ever touching a file.
+
+TEST_F(MatchingEngineTest, ConstructionPublishesSessionOpen) {
+    const auto types = drainEventTypes();
+    ASSERT_EQ(types.size(), 1u);
+    EXPECT_EQ(types[0], EventTypes::SESSION_OPEN);
+}
+
+TEST_F(MatchingEngineTest, DestructionPublishesSessionClose) {
+    std::vector<EventTypes> types;
+    {
+        auto scoped_queue = std::make_shared<EventQueue>();
+        { MatchingEngine<LockQueue> scoped{scoped_queue}; }  // open, then close
+        while (auto popped = scoped_queue->try_pop()) {
+            types.push_back((*popped)->event_type);
+        }
+    }
+    ASSERT_EQ(types.size(), 2u);
+    EXPECT_EQ(types[0], EventTypes::SESSION_OPEN);
+    EXPECT_EQ(types[1], EventTypes::SESSION_CLOSE);
+}
+
+TEST_F(MatchingEngineTest, LimitOrderPublishesLimitAddEvent) {
+    me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+
+    const auto types = drainEventTypes();
+    ASSERT_EQ(types.size(), 2u);
+    EXPECT_EQ(types[1], EventTypes::LIMIT_ORDER_ADDED);
+}
+
+TEST_F(MatchingEngineTest, MarketOrderPublishesMarketAddEvent) {
+    me.addOrder(100, 10, OrderType::MARKET, OrderSide::BUY);
+
+    // The add event reflects the order type rather than always saying LIMIT.
+    const auto types = drainEventTypes();
+    ASSERT_EQ(types.size(), 2u);
+    EXPECT_EQ(types[1], EventTypes::MARKET_ORDER_ADDED);
+}
+
+TEST_F(MatchingEngineTest, CancelPublishesCancelEvent) {
+    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+    ASSERT_TRUE(me.cancelOrder(id));
+
+    const auto types = drainEventTypes();
+    ASSERT_EQ(types.size(), 3u);
+    EXPECT_EQ(types[2], EventTypes::ORDER_CANCELLED);
+}
+
+TEST_F(MatchingEngineTest, FailedCancelPublishesNothing) {
+    EXPECT_FALSE(me.cancelOrder(9999));
+
+    // Only SESSION_OPEN; a cancel that did nothing must not be logged as one.
+    const auto types = drainEventTypes();
+    ASSERT_EQ(types.size(), 1u);
+    EXPECT_EQ(types[0], EventTypes::SESSION_OPEN);
+}
+
+TEST_F(MatchingEngineTest, ModifyPublishesModifyEvent) {
+    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+    ASSERT_TRUE(me.modifyOrder(id, 5, 99, OrderSide::BUY, OrderType::LIMIT).has_value());
+
+    const auto types = drainEventTypes();
+    ASSERT_EQ(types.size(), 3u);
+    EXPECT_EQ(types[2], EventTypes::ORDER_MODIFIED);
+}
+
+TEST_F(MatchingEngineTest, FailedModifyPublishesNothing) {
+    EXPECT_FALSE(me.modifyOrder(9999, 10, 100, OrderSide::BUY, OrderType::LIMIT).has_value());
+
+    const auto types = drainEventTypes();
+    ASSERT_EQ(types.size(), 1u);
+}
+
+TEST_F(MatchingEngineTest, MatchPublishesTradeEvent) {
+    const order_id_t sell_id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::SELL);
+    const order_id_t buy_id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+
+    const auto trades = drainTrades();
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].buy_id, buy_id);
+    EXPECT_EQ(trades[0].sell_id, sell_id);
+    EXPECT_EQ(trades[0].trade_qty, 10);
+    EXPECT_EQ(trades[0].trade_price, 100);
+}
+
+TEST_F(MatchingEngineTest, SweepPublishesOneTradePerLevelConsumed) {
+    me.addOrder(100, 5, OrderType::LIMIT, OrderSide::SELL);
+    me.addOrder(101, 5, OrderType::LIMIT, OrderSide::SELL);
+    me.addOrder(101, 8, OrderType::LIMIT, OrderSide::BUY);
+
+    // 8 lots clear the 100 level and take 3 from the 101 level: two fills.
+    const auto trades = drainTrades();
+    ASSERT_EQ(trades.size(), 2u);
+    EXPECT_EQ(trades[0].trade_price, 100);
+    EXPECT_EQ(trades[0].trade_qty, 5);
+    EXPECT_EQ(trades[1].trade_price, 101);
+    EXPECT_EQ(trades[1].trade_qty, 3);
+}
+
+TEST_F(MatchingEngineTest, NonCrossingOrderPublishesNoTrade) {
+    me.addOrder(102, 10, OrderType::LIMIT, OrderSide::SELL);
+    me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+
+    EXPECT_TRUE(drainTrades().empty());
 }
