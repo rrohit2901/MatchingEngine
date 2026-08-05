@@ -30,6 +30,7 @@ class MatchingEngine {
 // The session markers bracket the log: opening in the constructor and closing in
 // the destructor guarantees every event in between is enclosed by a pair.
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 MatchingEngine<InputCont, T>::MatchingEngine(std::shared_ptr<InputCont<T>> event_container)
     : order_book{std::make_shared<OrderBook>()},
       event_manager{std::make_shared<EventManager<InputCont, T>>(event_container)},
@@ -38,11 +39,13 @@ MatchingEngine<InputCont, T>::MatchingEngine(std::shared_ptr<InputCont<T>> event
 }
 
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 MatchingEngine<InputCont, T>::~MatchingEngine() {
     event_manager->addSessionCloseEvent();
 }
 
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 order_id_t MatchingEngine<InputCont, T>::addOrder(int price, int quantity, OrderType type, OrderSide side) {
     order_id_t order_id = order_book->addOrder(price, quantity, type, side);
 
@@ -58,6 +61,7 @@ order_id_t MatchingEngine<InputCont, T>::addOrder(int price, int quantity, Order
 }
 
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 bool MatchingEngine<InputCont, T>::cancelOrder(order_id_t orderId) {
     // The side has to be read before the cancel: a cancelled order is erased
     // from the OrderManager, so afterwards there is nothing left to ask.
@@ -71,6 +75,7 @@ bool MatchingEngine<InputCont, T>::cancelOrder(order_id_t orderId) {
 }
 
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 std::optional<order_id_t> MatchingEngine<InputCont, T>::modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type) {
     auto modified_order_id = order_book->modifyOrder(orderId, newQuantity, newPrice, newSide, type);
     if (modified_order_id) {
@@ -83,16 +88,19 @@ std::optional<order_id_t> MatchingEngine<InputCont, T>::modifyOrder(order_id_t o
 }
 
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 std::vector<std::shared_ptr<BookLevel>> MatchingEngine<InputCont, T>::getBuySideView(int numLevels) const {
     return order_book->getBuySideView(numLevels);
 }
 
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 std::vector<std::shared_ptr<BookLevel>> MatchingEngine<InputCont, T>::getSellSideView(int numLevels) const {
     return order_book->getSellSideView(numLevels);
 }
 
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 std::pair<std::vector<std::shared_ptr<BookLevel>>, std::vector<std::shared_ptr<BookLevel>>> MatchingEngine<InputCont, T>::getOrderBookView(int numLevels) const {
     return {order_book->getBuySideView(numLevels), order_book->getSellSideView(numLevels)};
 }

@@ -17,9 +17,11 @@ class Matcher {
 };
 
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 Matcher<InputCont, T>::Matcher(std::shared_ptr<OrderBook>& ob, std::shared_ptr<EventManager<InputCont, T>>& event_manager): order_book(ob), event_manager(event_manager) {}
 
 template<template<typename> class InputCont, typename T>
+requires validInputContConsumer<InputCont<T>, T>
 bool Matcher<InputCont, T>::tryMatch(order_id_t order_id) {
     // One lookup for side, type, price and quantity; this used to be four.
     const auto order = order_book->getOrderView(order_id);
