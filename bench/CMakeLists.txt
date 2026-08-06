@@ -22,5 +22,7 @@ add_bench(bench_cancel)
 add_executable(bench_latency bench_latency.cpp)
 target_link_libraries(bench_latency PRIVATE
     me_core
+    me_ds_lock          # LockQueue for the MatchingEngine event container
+    Threads::Threads    # background event drain
     project_options
 )

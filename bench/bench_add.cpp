@@ -57,8 +57,10 @@ void BM_Add_SpreadAcrossLevels(benchmark::State& state) {
 }
 BENCHMARK(BM_Add_SpreadAcrossLevels)->Unit(benchmark::kNanosecond);
 
-// Market-order add. Matching is not implemented yet, so this currently rests the order at the
-// side's sentinel price; it still exercises the OrderType::MARKET branch of addOrder.
+// Market-order add. The sentinel-price handling for market orders is still unimplemented —
+// OrderBookSide::addOrder ignores its OrderType and files the order at the price passed in —
+// so this currently measures the same path as BM_Add_ExistingPriceLevel. It is kept as the
+// placeholder for when market orders land.
 void BM_Add_MarketOrder(benchmark::State& state) {
     OrderBook book;
     for (auto _ : state) {

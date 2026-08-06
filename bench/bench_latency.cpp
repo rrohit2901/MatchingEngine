@@ -21,17 +21,23 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "Order.h"
 #include "OrderBook.h"
+#include "MatchingEngine.h"
+#include "lock_queue.h"
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using EventQueue = LockQueue<std::unique_ptr<Event>>;
 
-constexpr double kBasePrice = 100.0;
+// Prices are ints; this used to be a double that converted at every call site.
+constexpr int kBasePrice = 100;
 constexpr int kQuantity = 10;
 constexpr int kPriceLevels = 100;  // bounded spread for add
 constexpr int kBookLevels = 100;   // background depth for cancel/modify
@@ -154,13 +160,13 @@ Stats measureModify(int n) {
     int i = 0;
     for (int w = 0; w < kWarmup; ++w) {
         const int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
-        const auto modified = book.modifyOrder(id, kQuantity + 1, static_cast<int>(kBasePrice) + 1 + (i++ % kPriceLevels), OrderSide::BUY, OrderType::LIMIT);
+        const auto modified = book.modifyOrder(id, kQuantity + 1, kBasePrice + 1 + (i++ % kPriceLevels), OrderSide::BUY, OrderType::LIMIT);
         g_sink = modified.has_value();
         book.cancelOrder(modified.value_or(id));
     }
     for (int k = 0; k < n; ++k) {
         const int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);  // untimed setup
-        const int newPrice = static_cast<int>(kBasePrice) + 1 + (i++ % kPriceLevels);
+        const int newPrice = kBasePrice + 1 + (i++ % kPriceLevels);
         const auto t0 = Clock::now();
         const auto modified = book.modifyOrder(id, kQuantity + 1, newPrice, OrderSide::BUY, OrderType::LIMIT);
         const auto t1 = Clock::now();
@@ -168,6 +174,107 @@ Stats measureModify(int n) {
         // A reprice mints a new id; cancelling `id` here would leak the repriced
         // order and let the book grow across all n samples.
         book.cancelOrder(modified.value_or(id));  // untimed cleanup keeps the book bounded
+        s.push_back(nanos(t0, t1));
+    }
+    return summarize(s);
+}
+
+// --- MatchingEngine path ----------------------------------------------------
+// The OrderBook rows above measure the book in isolation. These measure what a
+// caller actually pays now: risk checks, event publishing, and matching on top
+// of the same book operation.
+//
+// Events are drained by a background thread that discards them, mirroring the
+// Logger without its file I/O — the point is the producer-side cost on the hot
+// path, not how fast the consumer writes.
+struct EventDrain {
+    std::shared_ptr<EventQueue> queue{std::make_shared<EventQueue>()};
+    std::thread worker;
+
+    EventDrain() {
+        worker = std::thread([q = queue] {
+            while (true) {
+                std::unique_ptr<Event> event;
+                q->wait_and_pop(event);
+                if (!event) break;
+            }
+        });
+    }
+    ~EventDrain() {
+        queue->push(nullptr);
+        worker.join();
+    }
+};
+
+using Engine = MatchingEngine<LockQueue>;
+
+Stats measureEngineAdd(int n) {
+    EventDrain drain;
+    auto engine = std::make_unique<Engine>(drain.queue);
+    std::vector<double> s;
+    s.reserve(static_cast<std::size_t>(n));
+    int i = 0;
+    for (int w = 0; w < kWarmup; ++w) {
+        g_sink = engine->addOrder(kBasePrice + (i++ % kPriceLevels), kQuantity, OrderType::LIMIT, OrderSide::BUY).has_value();
+    }
+    for (int k = 0; k < n; ++k) {
+        if (k % kAddResetEvery == 0) {
+            engine = std::make_unique<Engine>(drain.queue);  // untimed: bound the book
+        }
+        const int price = kBasePrice + (i++ % kPriceLevels);
+        const auto t0 = Clock::now();
+        const auto id = engine->addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        const auto t1 = Clock::now();
+        g_sink = id.has_value();
+        s.push_back(nanos(t0, t1));
+    }
+    return summarize(s);
+}
+
+Stats measureEngineModify(int n) {
+    EventDrain drain;
+    Engine engine{drain.queue};
+    std::vector<double> s;
+    s.reserve(static_cast<std::size_t>(n));
+    int i = 0;
+    for (int w = 0; w < kWarmup; ++w) {
+        const auto id = engine.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        const auto modified = engine.modifyOrder(id.value(), kQuantity + 1, kBasePrice + 1 + (i++ % kPriceLevels), OrderSide::BUY, OrderType::LIMIT);
+        engine.cancelOrder(modified.value_or(id.value()));
+    }
+    for (int k = 0; k < n; ++k) {
+        const auto id = engine.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);  // untimed setup
+        const int newPrice = kBasePrice + 1 + (i++ % kPriceLevels);
+        const auto t0 = Clock::now();
+        const auto modified = engine.modifyOrder(id.value(), kQuantity + 1, newPrice, OrderSide::BUY, OrderType::LIMIT);
+        const auto t1 = Clock::now();
+        g_sink = modified.has_value();
+        engine.cancelOrder(modified.value_or(id.value()));  // untimed cleanup
+        s.push_back(nanos(t0, t1));
+    }
+    return summarize(s);
+}
+
+Stats measureEngineCancel(int n) {
+    EventDrain drain;
+    Engine engine{drain.queue};
+    for (int level = 0; level < kBookLevels; ++level) {
+        engine.addOrder(kBasePrice + level, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+    }
+    std::vector<double> s;
+    s.reserve(static_cast<std::size_t>(n));
+    int i = 0;
+    for (int w = 0; w < kWarmup; ++w) {
+        const auto id = engine.addOrder(kBasePrice + kBookLevels + (i++ % kBookLevels), kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        g_sink = engine.cancelOrder(id.value());
+    }
+    for (int k = 0; k < n; ++k) {
+        const int price = kBasePrice + kBookLevels + (i++ % kBookLevels);
+        const auto id = engine.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);  // untimed setup
+        const auto t0 = Clock::now();
+        const bool ok = engine.cancelOrder(id.value());
+        const auto t1 = Clock::now();
+        g_sink = ok;
         s.push_back(nanos(t0, t1));
     }
     return summarize(s);
@@ -199,13 +306,17 @@ int main(int argc, char** argv) {
 
     const double overhead = clockOverheadNs();
 
-    std::printf("OrderBook per-operation latency  (samples per op: %d)\n", n);
+    std::printf("Per-operation latency  (samples per op: %d)\n"
+                "  OrderBook rows = book only; Engine rows add risk checks, event publishing and matching\n", n);
     std::printf("steady_clock overhead (median of a now() pair): %.1f ns\n\n", overhead);
 
     printHeader();
-    printRow("add (spread)", measureAdd(n));
-    printRow("modify (reprice)", measureModify(n));
-    printRow("cancel (deep book)", measureCancel(n));
+    printRow("OrderBook add", measureAdd(n));
+    printRow("OrderBook modify", measureModify(n));
+    printRow("OrderBook cancel", measureCancel(n));
+    printRow("Engine add", measureEngineAdd(n));
+    printRow("Engine modify", measureEngineModify(n));
+    printRow("Engine cancel", measureEngineCancel(n));
 
     std::printf("\nNote: latencies include one steady_clock::now() pair (~%.1f ns); CPU "
                 "frequency scaling is not pinned, so absolute numbers vary run to run.\n",
