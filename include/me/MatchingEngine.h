@@ -55,7 +55,11 @@ std::optional<order_id_t> MatchingEngine<InputCont, T>::addOrder(int price, int 
     std::optional<int> top_book_price = std::nullopt;
     if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
 
-    if(!risk_manager.runAllChecks(price, quantity, top_book_price)) return std::nullopt;
+    if (const RejectReason reason = risk_manager.checkOrder(price, quantity, top_book_price);
+        reason != RejectReason::NONE) {
+        event_manager->addOrderRejectedEvent(price, quantity, side, type, to_string(reason));
+        return std::nullopt;
+    }
 
     order_id_t order_id = order_book->addOrder(price, quantity, type, side);
 
@@ -92,15 +96,25 @@ std::optional<order_id_t> MatchingEngine<InputCont, T>::modifyOrder(order_id_t o
     std::optional<int> top_book_price = std::nullopt;
     if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
 
-    if(!risk_manager.runAllChecks(newPrice, newQuantity, top_book_price)) return std::nullopt;
+    if (const RejectReason reason = risk_manager.checkOrder(newPrice, newQuantity, top_book_price);
+        reason != RejectReason::NONE) {
+        event_manager->addOrderModifyRejectedEvent(orderId, newPrice, newQuantity, newSide, to_string(reason));
+        return std::nullopt;
+    }
 
     auto modified_order_id = order_book->modifyOrder(orderId, newQuantity, newPrice, newSide, type);
-    if (modified_order_id) {
-        // Both ids are logged because a reprice retires the original order and
-        // books a replacement under a fresh id.
-        event_manager->addOrderModifiedEvent(orderId, modified_order_id.value(), newPrice, newQuantity, newSide);
-        matcher.tryMatch(modified_order_id.value());
+    if (!modified_order_id) {
+        // Passed risk but the order is not in the book — an amend for something
+        // already filled, cancelled, or never seen. Still a rejected request.
+        event_manager->addOrderModifyRejectedEvent(orderId, newPrice, newQuantity, newSide, "ORDER_NOT_FOUND");
+        return std::nullopt;
     }
+
+    // Both ids are logged because a reprice retires the original order and
+    // books a replacement under a fresh id.
+    event_manager->addOrderModifiedEvent(orderId, modified_order_id.value(), newPrice, newQuantity, newSide);
+    matcher.tryMatch(modified_order_id.value());
+
     return modified_order_id;
 }
 

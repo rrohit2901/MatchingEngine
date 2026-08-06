@@ -1,136 +1,123 @@
-# Benchmarks
+# Benchmark reference numbers
 
-Latency benchmarking for the single-symbol `OrderBook`. Two complementary tools:
+Baseline figures to compare future changes against. Re-run and update this file
+whenever the hot path changes.
 
-| Tool | Built from | Reports | Use for |
-|------|-----------|---------|---------|
-| **Google Benchmark suite** | `bench_add`, `bench_modify`, `bench_cancel` | mean time / throughput per op, across several scenarios | comparing code paths, throughput |
-| **Latency harness** | `bench_latency` | per-operation **P50 / P99 / P99.9** (tail) | latency SLOs, regression tracking |
+## How these were produced
 
-> Google Benchmark reports the *mean* over a large inner loop, which hides the tail.
-> `bench_latency` times each operation individually and computes true percentiles —
-> that's what the baseline below records.
-
-## Building
-
-Benchmarks **must** be built in **Release** (`-O3 -march=native`). A Debug build makes the
-numbers meaningless (Google Benchmark even prints a `Library was built as DEBUG` warning).
-
-```bash
+```
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build build-release --target bench_add bench_modify bench_cancel bench_latency
+cmake --build build-release -j
+./build-release/bench/bench_latency 300000
+./build-release/bench/bench_add     --benchmark_min_time=0.5s
+./build-release/bench/bench_cancel  --benchmark_min_time=0.5s
+./build-release/bench/bench_modify  --benchmark_min_time=0.5s
 ```
 
-## Running
+| | |
+|---|---|
+| Date | 2026-08-06 |
+| Commit | `7265687` (plus reject-event changes) |
+| CPU | 12th Gen Intel Core i7-1250U (12 threads) |
+| Compiler | g++ 11.4.0 |
+| Build | Release — `-O3 -march=native -DNDEBUG` |
+| Samples | 300,000 per operation |
+| Timer overhead | ~27 ns per `steady_clock::now()` pair — subtract from every figure |
 
-### 0. Build first (Release)
+CPU frequency scaling was **not** pinned, so absolute numbers move a few percent
+run to run. P50s were stable across three runs (±5%); tails were not.
 
-```bash
-cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build build-release --target bench_add bench_modify bench_cancel bench_latency
-```
+## Per-operation latency (`bench_latency`)
 
-All four executables land in `build-release/bench/`. For the steadiest numbers, pin a
-performance core and prefix any command with `taskset -c 0` (see Caveats).
+All values in nanoseconds.
 
-### 1. Latency harness — `bench_latency`  (P50 / P99 / P99.9)
+| operation | P50 | P99 | P99.9 | mean |
+|---|---:|---:|---:|---:|
+| OrderBook add | 87 | 273 | 1,892 | 167 |
+| OrderBook modify | 221 | 498 | 807 | 291 |
+| OrderBook cancel | 150 | 289 | 429 | 171 |
+| Engine add | 710 | 5,177 | 42,822 | 1,367 |
+| Engine modify | 1,348 | 16,336 | 75,487 | 2,224 |
+| Engine cancel | 502 | 3,193 | 45,081 | 814 |
 
-```bash
-./build-release/bench/bench_latency            # 1,000,000 samples/op (default)
-./build-release/bench/bench_latency 2000000    # first arg overrides the sample count
-taskset -c 0 ./build-release/bench/bench_latency   # pin to one core for stabler tails
-```
+`OrderBook` rows measure the book in isolation. `Engine` rows are the same
+operation through `MatchingEngine`, which adds risk checks, event publishing and
+matching. Engine benchmarks run with a background thread draining the event
+queue and discarding — the Logger's role without its file I/O, so the figure is
+the producer-side cost on the hot path.
 
-Prints one row per operation (`add`, `modify`, `cancel`) with P50/P99/P99.9 + min/max/mean
-in nanoseconds, plus the measured `steady_clock` overhead. No flags other than the sample count.
+## Where the Engine overhead goes
 
-### 2. Throughput suites — `bench_add` / `bench_modify` / `bench_cancel`
+Measured separately, same build:
 
-These are [Google Benchmark](https://github.com/google/benchmark) binaries, so they accept all
-standard `--benchmark_*` flags. Run with no flags to execute every scenario:
+| component | P50 |
+|---|---:|
+| `LockQueue::push` (one event), consumer draining | 266 ns |
+| `LockQueue::push` (one event), no consumer | 206 ns |
+| `RiskManager::runAllChecks` | 28 ns |
 
-```bash
-./build-release/bench/bench_add
-./build-release/bench/bench_modify
-./build-release/bench/bench_cancel
-```
+- **Event publishing dominates.** ~266 ns per operation — more than 3x an entire
+  `OrderBook` add. That is `make_unique<Event>` plus `make_shared` inside
+  `LockQueue::push` plus a mutex, on every order. Contention with the drain
+  thread adds ~60 ns at P50 and far more in the tail: `wait_and_pop` takes
+  `tail_mutex` on every predicate re-check, so consumer and producer contend for
+  the same lock. That is the source of the 40-75 us P99.9 figures.
+- **Risk checks are effectively free.** 28 ns is within timer noise.
+- **Matching costs a second book mutation.** `tryMatch` runs `getOrderView` +
+  `fillOrders` + `modifyOrder` even when nothing crosses, so
+  Engine add ~= book add (87) + event (266) + a modify-shaped operation (~280).
 
-Scenarios per binary (use as `--benchmark_filter` substrings):
+The optimisation target, if the hot path ever needs to go below ~200 ns, is the
+queue rather than the engine: pre-allocated POD events in a bounded ring buffer
+would remove both allocations and the lock.
 
-| Binary | Scenarios |
-|--------|-----------|
-| `bench_add`    | `NewPriceLevel`, `ExistingPriceLevel`, `SpreadAcrossLevels`, `MarketOrder` |
-| `bench_modify` | `QuantityOnly`, `ChangePriceLevel`, `ChangeSide` |
-| `bench_cancel` | `LastOrderOnLevel`, `OneOfManyOnLevel`, `FromDeepBook` |
+## Google Benchmark suites
 
-```bash
-# List the scenarios in a binary without running them
-./build-release/bench/bench_add --benchmark_list_tests
+Mean ns/op.
 
-# Run a subset (regex / substring match on the scenario name)
-./build-release/bench/bench_modify --benchmark_filter=ChangeSide
-./build-release/bench/bench_cancel --benchmark_filter='LastOrderOnLevel|FromDeepBook'
+| benchmark | ns |
+|---|---:|
+| `BM_Add_NewPriceLevel` | 1,373 |
+| `BM_Add_ExistingPriceLevel` | 155 |
+| `BM_Add_SpreadAcrossLevels` | 123 |
+| `BM_Add_MarketOrder` | 92 |
+| `BM_Cancel_LastOrderOnLevel` | 500 |
+| `BM_Cancel_OneOfManyOnLevel` | 503 |
+| `BM_Cancel_FromDeepBook` | 532 |
+| `BM_Modify_QuantityOnly` | 931 |
+| `BM_Modify_ChangePriceLevel` | 1,026 |
+| `BM_Modify_ChangeSide` | 1,033 |
 
-# Statistical run: repeat each scenario and report mean/median/stddev only
-./build-release/bench/bench_add --benchmark_repetitions=10 --benchmark_report_aggregates_only=true
+**Treat these as much softer than the `bench_latency` numbers.** Two known
+methodology problems, neither fixed:
 
-# Longer measurement window per scenario (more stable means)
-./build-release/bench/bench_cancel --benchmark_min_time=2s
+1. `bench_modify` and `bench_cancel` call `PauseTiming()`/`ResumeTiming()` every
+   iteration, which costs more than the operation being measured. That is why
+   cancel reads ~500 ns here and 150 ns in `bench_latency`. Batch the setup to
+   fix it.
+2. `BM_Add_NewPriceLevel` and `BM_Add_ExistingPriceLevel` grow the book without
+   bound while Google Benchmark chooses iteration counts adaptively, so their
+   means depend on how many iterations happened to run and are not comparable
+   between builds. `bench_latency` avoids this by rebuilding the book every
+   `kAddResetEvery` orders.
 
-# Machine-readable output (for tracking / plotting)
-./build-release/bench/bench_add --benchmark_format=json --benchmark_out=add.json
-./build-release/bench/bench_add --benchmark_format=csv  > add.csv
+`BM_Add_MarketOrder` currently measures the same path as
+`BM_Add_ExistingPriceLevel`: market orders do not yet rest at a sentinel price.
+It is a placeholder for when they do.
 
-# Full flag reference
-./build-release/bench/bench_add --help
-```
+## Historical note
 
-### 3. Run everything
+The `OrderView` refactor (single lookup per operation instead of one per field)
+was measured against the commit before it. Engine-level figures did not exist
+then; `OrderBook` P50s moved as follows:
 
-```bash
-for b in bench_add bench_modify bench_cancel; do
-    echo "===== $b ====="; ./build-release/bench/$b
-done
-./build-release/bench/bench_latency
-```
+| operation | before `OrderView` | after |
+|---|---:|---:|
+| add | 56-67 | 66-67 |
+| modify | 173-231 | 172-174 |
+| cancel | 106-123 | 115 |
 
-## Baseline (latency)
-
-Snapshot — **2026-06-22**, commit `bf6e327` + benchmark infra.
-Machine: Intel Core i7-1250U, GCC 11.4, `-O3 -march=native`, Linux (WSL2), 1,000,000 samples/op.
-
-| Operation | P50 | P99 | P99.9 | min | mean |
-|-----------|----:|----:|------:|----:|-----:|
-| **add** (limit, spread over 100 levels) | 80 ns | 1131 ns | 3685 ns | 67 ns | 156 ns |
-| **modify** (reprice to a new level)     | 130 ns | 247 ns | 393 ns | 118 ns | 138 ns |
-| **cancel** (against a 100-level book)   | 98 ns | 254 ns | 374 ns | 87 ns | 107 ns |
-
-Each latency includes one `steady_clock::now()` pair (~22 ns here — measured and printed at runtime).
-
-### Reading the numbers
-- **`add` has the widest tail** — its P99/P99.9 are dominated by `std::map` node allocation when a
-  price level is first created, and by `std::vector` reallocation as a level grows. The P50 (the common
-  append-to-existing-level path) is the cheapest of the three.
-- **`modify` (reprice) and `cancel` are tight** — bounded work (cancel from old level + add to new, or a
-  single tombstone + lookup), so their tails stay within ~3–4× of P50.
-- **`max`** (not tabulated) regularly hits the millisecond range. Those are OS scheduling / page-fault /
-  allocator outliers on an unpinned laptop, not order-book work.
-
-## Methodology & caveats
-- **Per-op timing.** Setup (resting the order a `cancel`/`modify` operates on; rebuilding a grown `add`
-  book) is done **outside** the timed window via separate `now()` brackets, so only the operation under
-  test is measured. A 50k-iteration warmup precedes each measurement.
-- **`add` is bounded to steady state.** `BookLevel::cancelOrder` only *tombstones* an order — a level's
-  vector is freed only when the level fully drains. Left unbounded, vector-doubling reallocs would
-  dominate the `add` tail, so the harness rebuilds the book every 100k adds (untimed) to hold per-level
-  depth realistic (~1k orders/level).
-- **Not reproducible to the nanosecond.** CPU frequency scaling is not pinned and the i7-1250U mixes
-  P/E cores, so absolute numbers swing run to run (P50 `add` was seen between ~80 and ~132 ns across
-  runs). For tighter numbers pin a performance core and disable turbo, e.g.
-  `taskset -c 0 ./build-release/bench/bench_latency`. Treat the table as an order-of-magnitude baseline
-  and track *relative* movement between commits.
-
-## Not yet covered
-- **Match / crossing-fill latency.** The engine does not cross orders yet (incoming orders only rest;
-  market orders rest at a sentinel price), so there is no fill path to benchmark. A `bench_match`
-  scenario will be added once matching lands.
+Modify recovered most of a regression introduced when orders moved into a
+central `OrderManager`, and became far more stable (173-231 -> 172-174). Absolute
+values differ from the table above because those runs were on a quieter machine;
+compare within a table, not across.

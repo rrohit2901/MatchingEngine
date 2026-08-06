@@ -309,11 +309,14 @@ TEST_F(MatchingEngineTest, ModifyPublishesModifyEvent) {
     EXPECT_EQ(types[2], EventTypes::ORDER_MODIFIED);
 }
 
-TEST_F(MatchingEngineTest, FailedModifyPublishesNothing) {
+TEST_F(MatchingEngineTest, ModifyForUnknownOrderPublishesRejectEvent) {
     EXPECT_FALSE(me.modifyOrder(9999, 10, 100, OrderSide::BUY, OrderType::LIMIT).has_value());
 
+    // Passes risk, but there is no such order: still a rejected request, and it
+    // must be logged rather than silently dropped.
     const auto types = drainEventTypes();
-    ASSERT_EQ(types.size(), 1u);
+    ASSERT_EQ(types.size(), 2u);
+    EXPECT_EQ(types[1], EventTypes::ORDER_MODIFY_REJECTED);
 }
 
 TEST_F(MatchingEngineTest, MatchPublishesTradeEvent) {
@@ -383,13 +386,13 @@ TEST_F(MatchingEngineTest, FirstOrderIsNotPriceCheckedAgainstAnEmptyBook) {
     EXPECT_TRUE(me.addOrder(9999999, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
 }
 
-TEST_F(MatchingEngineTest, RejectedOrderPublishesNoEvent) {
+TEST_F(MatchingEngineTest, RejectedOrderPublishesRejectNotAdd) {
     ASSERT_FALSE(me.addOrder(100, 0, OrderType::LIMIT, OrderSide::BUY).has_value());
 
-    // Only SESSION_OPEN: a rejected order must not reach the log as an add.
+    // A rejected order is logged as a reject, never as an add.
     const auto types = drainEventTypes();
-    ASSERT_EQ(types.size(), 1u);
-    EXPECT_EQ(types[0], EventTypes::SESSION_OPEN);
+    ASSERT_EQ(types.size(), 2u);
+    EXPECT_EQ(types[1], EventTypes::ORDER_REJECTED);
 }
 
 TEST_F(MatchingEngineTest, RejectedModifyLeavesOrderUntouched) {
@@ -410,4 +413,85 @@ TEST_F(MatchingEngineTest, CustomRiskParamsAreApplied) {
 
     EXPECT_TRUE(strict.addOrder(100, 50, OrderType::LIMIT, OrderSide::BUY).has_value());
     EXPECT_FALSE(strict.addOrder(100, 51, OrderType::LIMIT, OrderSide::BUY).has_value());
+}
+
+// --- reject events ---------------------------------------------------------
+// A reject is the only record that a request ever arrived, so it has to carry
+// enough to act on: what was asked for, and why it was refused.
+
+TEST_F(MatchingEngineTest, RejectEventCarriesRequestAndReason) {
+    ASSERT_FALSE(me.addOrder(100, 0, OrderType::LIMIT, OrderSide::BUY).has_value());
+
+    const auto events = drainEvents();
+    ASSERT_EQ(events.size(), 2u);
+    auto* reject = dynamic_cast<OrderRejected*>(events[1].get());
+    ASSERT_NE(reject, nullptr);
+    EXPECT_EQ(reject->price, 100);
+    EXPECT_EQ(reject->qty, 0);
+    EXPECT_EQ(reject->side, OrderSide::BUY);
+    EXPECT_EQ(reject->type, OrderType::LIMIT);
+    EXPECT_EQ(reject->reason, "QUANTITY_BELOW_MIN");
+}
+
+TEST_F(MatchingEngineTest, RejectReasonDistinguishesQuantityFromPrice) {
+    ASSERT_FALSE(me.addOrder(100, 1000000, OrderType::LIMIT, OrderSide::BUY).has_value());
+    {
+        const auto events = drainEvents();
+        ASSERT_EQ(events.size(), 2u);
+        auto* reject = dynamic_cast<OrderRejected*>(events[1].get());
+        ASSERT_NE(reject, nullptr);
+        EXPECT_EQ(reject->reason, "QUANTITY_ABOVE_MAX");
+    }
+
+    ASSERT_TRUE(me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
+    ASSERT_FALSE(me.addOrder(9100, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
+    {
+        const auto events = drainEvents();
+        auto* reject = dynamic_cast<OrderRejected*>(events.back().get());
+        ASSERT_NE(reject, nullptr);
+        EXPECT_EQ(reject->reason, "PRICE_TOO_FAR_FROM_TOP");
+    }
+}
+
+TEST_F(MatchingEngineTest, MarketOrderRejectRecordsItsType) {
+    ASSERT_FALSE(me.addOrder(100, 0, OrderType::MARKET, OrderSide::SELL).has_value());
+
+    const auto events = drainEvents();
+    auto* reject = dynamic_cast<OrderRejected*>(events.back().get());
+    ASSERT_NE(reject, nullptr);
+    EXPECT_EQ(reject->type, OrderType::MARKET);
+    EXPECT_EQ(reject->side, OrderSide::SELL);
+}
+
+TEST_F(MatchingEngineTest, ModifyRejectCarriesTargetOrderAndReason) {
+    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).value();
+    ASSERT_FALSE(me.modifyOrder(id, 0, 100, OrderSide::BUY, OrderType::LIMIT).has_value());
+
+    const auto events = drainEvents();
+    auto* reject = dynamic_cast<OrderModifyRejected*>(events.back().get());
+    ASSERT_NE(reject, nullptr);
+    // The targeted order is still resting under this id, untouched.
+    EXPECT_EQ(reject->order_id, id);
+    EXPECT_EQ(reject->new_qty, 0);
+    EXPECT_EQ(reject->new_price, 100);
+    EXPECT_EQ(reject->reason, "QUANTITY_BELOW_MIN");
+}
+
+TEST_F(MatchingEngineTest, ModifyRejectForUnknownOrderSaysNotFound) {
+    ASSERT_FALSE(me.modifyOrder(9999, 10, 100, OrderSide::BUY, OrderType::LIMIT).has_value());
+
+    const auto events = drainEvents();
+    auto* reject = dynamic_cast<OrderModifyRejected*>(events.back().get());
+    ASSERT_NE(reject, nullptr);
+    EXPECT_EQ(reject->order_id, 9999u);
+    EXPECT_EQ(reject->reason, "ORDER_NOT_FOUND");
+}
+
+TEST_F(MatchingEngineTest, AcceptedOrderPublishesNoReject) {
+    ASSERT_TRUE(me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
+
+    for (const auto& event : drainEvents()) {
+        EXPECT_NE(event->event_type, EventTypes::ORDER_REJECTED);
+        EXPECT_NE(event->event_type, EventTypes::ORDER_MODIFY_REJECTED);
+    }
 }

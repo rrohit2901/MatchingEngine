@@ -18,6 +18,8 @@ enum class EventTypes {
     MARKET_ORDER_ADDED,
     ORDER_MODIFIED,
     ORDER_CANCELLED,
+    ORDER_REJECTED,
+    ORDER_MODIFY_REJECTED,
     SESSION_CLOSE,
     SESSION_OPEN,
 };
@@ -170,6 +172,59 @@ class OrderCancelled: public Event {
             body << " | INFO | ORDER_CANCELLED"
                  << " | ORDER_ID: " << order_id
                  << " | SIDE: " << to_string(side);
+            write_line(output_file, body.str());
+        }
+};
+
+// A rejected order carries no order id: it was turned away before reaching the
+// book, so no id was ever minted for it. The reason is passed in as text so that
+// Events stays independent of the risk layer's enum.
+class OrderRejected: public Event {
+    public:
+        int price;
+        int qty;
+        OrderSide side;
+        OrderType type;
+        std::string reason;
+
+        OrderRejected(int price, int qty, OrderSide side, OrderType type, std::string reason)
+            : Event(EventTypes::ORDER_REJECTED), price(price), qty(qty), side(side), type(type),
+              reason(std::move(reason)) {}
+
+        void push_to_file(std::shared_ptr<std::ofstream>& output_file) override {
+            std::ostringstream body;
+            body << " | WARN | ORDER_REJECTED"
+                 << " | SIDE: " << to_string(side)
+                 << " | TYPE: " << (type == OrderType::MARKET ? "MARKET" : "LIMIT")
+                 << " | QTY: " << qty
+                 << " | PRICE: " << price
+                 << " | REASON: " << reason;
+            write_line(output_file, body.str());
+        }
+};
+
+// A rejected modify DOES have an order id: the order it targeted is still
+// resting, untouched, under that id.
+class OrderModifyRejected: public Event {
+    public:
+        order_id_t order_id;
+        int new_price;
+        int new_qty;
+        OrderSide side;
+        std::string reason;
+
+        OrderModifyRejected(order_id_t order_id, int new_price, int new_qty, OrderSide side, std::string reason)
+            : Event(EventTypes::ORDER_MODIFY_REJECTED), order_id(order_id), new_price(new_price),
+              new_qty(new_qty), side(side), reason(std::move(reason)) {}
+
+        void push_to_file(std::shared_ptr<std::ofstream>& output_file) override {
+            std::ostringstream body;
+            body << " | WARN | ORDER_MODIFY_REJECTED"
+                 << " | ORDER_ID: " << order_id
+                 << " | SIDE: " << to_string(side)
+                 << " | NEW_QTY: " << new_qty
+                 << " | NEW_PRICE: " << new_price
+                 << " | REASON: " << reason;
             write_line(output_file, body.str());
         }
 };

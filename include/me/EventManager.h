@@ -44,6 +44,14 @@ class EventManager {
             event_container->push(std::make_unique<OrderCancelled>(order_id, side));
         }
 
+        void addOrderRejectedEvent(int price, int qty, OrderSide side, OrderType type, std::string reason) {
+            event_container->push(std::make_unique<OrderRejected>(price, qty, side, type, std::move(reason)));
+        }
+
+        void addOrderModifyRejectedEvent(order_id_t order_id, int new_price, int new_qty, OrderSide side, std::string reason) {
+            event_container->push(std::make_unique<OrderModifyRejected>(order_id, new_price, new_qty, side, std::move(reason)));
+        }
+
         void addSessionOpenEvent() {
             event_container->push(std::make_unique<SessionOpen>());
         }

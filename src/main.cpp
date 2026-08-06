@@ -47,6 +47,21 @@ void runMatchingEngine(const std::shared_ptr<EventQueue>& events) {
     // Crosses the resting asks at 1010 and 1013: this is what produces trades.
     me.addOrder(1025, 10, OrderType::LIMIT, OrderSide::BUY);
 
+    // Rejected requests: each is refused before touching the book and logged
+    // with the reason, which is the only record that the request ever arrived.
+    if (!me.addOrder(1005, 0, OrderType::LIMIT, OrderSide::BUY)) {
+        std::cout << "add rejected: zero quantity\n";
+    }
+    if (!me.addOrder(9999, 10, OrderType::LIMIT, OrderSide::BUY)) {
+        std::cout << "add rejected: price too far from top of book\n";
+    }
+    if (!me.modifyOrder(buy1, 0, 1005, OrderSide::BUY, OrderType::LIMIT)) {
+        std::cout << "modify rejected: zero quantity\n";
+    }
+    if (!me.modifyOrder(9999, 10, 1005, OrderSide::BUY, OrderType::LIMIT)) {
+        std::cout << "modify rejected: no such order\n";
+    }
+
     // modifyOrder reports the surviving order id, or nullopt when the order is
     // not in the book. A requote can change the id, so keep the returned value.
     if (const auto requoted = me.modifyOrder(buy1, 15, 1005, OrderSide::BUY, OrderType::LIMIT)) {
