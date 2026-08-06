@@ -68,3 +68,12 @@ target_link_libraries(test_matching_engine PRIVATE
     project_options
 )
 add_test(NAME matching_engine_tests COMMAND test_matching_engine)
+
+add_executable(test_risk_manager test_risk_manager.cpp)
+target_link_libraries(test_risk_manager PRIVATE
+    me_core
+    GTest::gtest_main
+    project_warnings
+    project_options
+)
+add_test(NAME risk_manager_tests COMMAND test_risk_manager)

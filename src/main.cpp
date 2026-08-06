@@ -35,14 +35,14 @@ void printSide(const char* label, const std::vector<std::shared_ptr<BookLevel>>&
 void runMatchingEngine(const std::shared_ptr<EventQueue>& events) {
     MatchingEngine<LockQueue> me{events};
 
-    const order_id_t buy1 = me.addOrder(1005, 10, OrderType::LIMIT, OrderSide::BUY);
+    const order_id_t buy1 = me.addOrder(1005, 10, OrderType::LIMIT, OrderSide::BUY).value();
     me.addOrder(1010, 5, OrderType::LIMIT, OrderSide::SELL);
 
-    const order_id_t buy2 = me.addOrder(1007, 10, OrderType::LIMIT, OrderSide::BUY);
+    const order_id_t buy2 = me.addOrder(1007, 10, OrderType::LIMIT, OrderSide::BUY).value();
     me.addOrder(1013, 5, OrderType::LIMIT, OrderSide::SELL);
 
     me.addOrder(1005, 10, OrderType::LIMIT, OrderSide::BUY);
-    const order_id_t sell3 = me.addOrder(1025, 5, OrderType::LIMIT, OrderSide::SELL);
+    const order_id_t sell3 = me.addOrder(1025, 5, OrderType::LIMIT, OrderSide::SELL).value();
 
     // Crosses the resting asks at 1010 and 1013: this is what produces trades.
     me.addOrder(1025, 10, OrderType::LIMIT, OrderSide::BUY);

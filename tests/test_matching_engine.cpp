@@ -170,7 +170,7 @@ TEST_F(MatchingEngineTest, AggressorSweepsMultipleLevels) {
 }
 
 TEST_F(MatchingEngineTest, CancelOrder) {
-    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).value();
 
     EXPECT_TRUE(me.cancelOrder(id));
     EXPECT_TRUE(me.getBuySideView(5).empty());
@@ -182,7 +182,7 @@ TEST_F(MatchingEngineTest, CancelUnknownOrderFails) {
 }
 
 TEST_F(MatchingEngineTest, ModifyOrderRequotesToNewPrice) {
-    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).value();
 
     const auto requoted = me.modifyOrder(id, 10, 99, OrderSide::BUY, OrderType::LIMIT);
     ASSERT_TRUE(requoted.has_value());
@@ -199,7 +199,7 @@ TEST_F(MatchingEngineTest, ModifyUnknownOrderReturnsNullopt) {
 
 TEST_F(MatchingEngineTest, ModifyIntoACrossTrades) {
     me.addOrder(101, 10, OrderType::LIMIT, OrderSide::SELL);
-    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).value();
     ASSERT_EQ(restingQuantity(me.getSellSideView(5)), 10); // no cross yet
 
     // Repricing the bid up to the ask must match, not just move the order.
@@ -283,7 +283,7 @@ TEST_F(MatchingEngineTest, MarketOrderPublishesMarketAddEvent) {
 }
 
 TEST_F(MatchingEngineTest, CancelPublishesCancelEvent) {
-    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).value();
     ASSERT_TRUE(me.cancelOrder(id));
 
     const auto types = drainEventTypes();
@@ -301,7 +301,7 @@ TEST_F(MatchingEngineTest, FailedCancelPublishesNothing) {
 }
 
 TEST_F(MatchingEngineTest, ModifyPublishesModifyEvent) {
-    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).value();
     ASSERT_TRUE(me.modifyOrder(id, 5, 99, OrderSide::BUY, OrderType::LIMIT).has_value());
 
     const auto types = drainEventTypes();
@@ -317,8 +317,8 @@ TEST_F(MatchingEngineTest, FailedModifyPublishesNothing) {
 }
 
 TEST_F(MatchingEngineTest, MatchPublishesTradeEvent) {
-    const order_id_t sell_id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::SELL);
-    const order_id_t buy_id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+    const order_id_t sell_id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::SELL).value();
+    const order_id_t buy_id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).value();
 
     const auto trades = drainTrades();
     ASSERT_EQ(trades.size(), 1u);
@@ -347,4 +347,67 @@ TEST_F(MatchingEngineTest, NonCrossingOrderPublishesNoTrade) {
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
 
     EXPECT_TRUE(drainTrades().empty());
+}
+
+// --- risk checks -----------------------------------------------------------
+// addOrder/modifyOrder return nullopt when the pre-trade risk layer rejects,
+// and a rejected order must leave no trace: no book change and no event.
+
+TEST_F(MatchingEngineTest, RejectsZeroQuantityOrder) {
+    EXPECT_FALSE(me.addOrder(100, 0, OrderType::LIMIT, OrderSide::BUY).has_value());
+    EXPECT_TRUE(me.getBuySideView(5).empty());
+}
+
+TEST_F(MatchingEngineTest, RejectsNegativeQuantityOrder) {
+    // Previously this booked a level with total_quantity == -5.
+    EXPECT_FALSE(me.addOrder(100, -5, OrderType::LIMIT, OrderSide::BUY).has_value());
+    EXPECT_TRUE(me.getBuySideView(5).empty());
+    EXPECT_EQ(restingQuantity(me.getBuySideView(5)), 0);
+}
+
+TEST_F(MatchingEngineTest, RejectsQuantityAboveLimit) {
+    EXPECT_FALSE(me.addOrder(100, 1000000, OrderType::LIMIT, OrderSide::BUY).has_value());
+    EXPECT_TRUE(me.getBuySideView(5).empty());
+}
+
+TEST_F(MatchingEngineTest, RejectsPriceFarFromTopOfBook) {
+    ASSERT_TRUE(me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
+
+    // Default deviation is 1000; 100 + 5000 is well outside it.
+    EXPECT_FALSE(me.addOrder(5100, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
+    EXPECT_EQ(me.getBuySideView(5).size(), 1u);
+}
+
+TEST_F(MatchingEngineTest, FirstOrderIsNotPriceCheckedAgainstAnEmptyBook) {
+    // No top of book yet, so there is nothing to deviate from.
+    EXPECT_TRUE(me.addOrder(9999999, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
+}
+
+TEST_F(MatchingEngineTest, RejectedOrderPublishesNoEvent) {
+    ASSERT_FALSE(me.addOrder(100, 0, OrderType::LIMIT, OrderSide::BUY).has_value());
+
+    // Only SESSION_OPEN: a rejected order must not reach the log as an add.
+    const auto types = drainEventTypes();
+    ASSERT_EQ(types.size(), 1u);
+    EXPECT_EQ(types[0], EventTypes::SESSION_OPEN);
+}
+
+TEST_F(MatchingEngineTest, RejectedModifyLeavesOrderUntouched) {
+    const order_id_t id = me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).value();
+
+    EXPECT_FALSE(me.modifyOrder(id, 0, 100, OrderSide::BUY, OrderType::LIMIT).has_value());
+
+    const auto bids = me.getBuySideView(5);
+    ASSERT_EQ(bids.size(), 1u);
+    EXPECT_EQ(bids.front()->getTotalQuantity(), 10); // unchanged
+}
+
+TEST_F(MatchingEngineTest, CustomRiskParamsAreApplied) {
+    auto q = std::make_shared<EventQueue>();
+    RiskParams params;
+    params.max_allowed_quantity_quote = 50;
+    MatchingEngine<LockQueue> strict{q, params};
+
+    EXPECT_TRUE(strict.addOrder(100, 50, OrderType::LIMIT, OrderSide::BUY).has_value());
+    EXPECT_FALSE(strict.addOrder(100, 51, OrderType::LIMIT, OrderSide::BUY).has_value());
 }

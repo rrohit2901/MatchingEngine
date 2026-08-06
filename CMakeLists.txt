@@ -78,7 +78,12 @@ add_library(me_core
     src/me/OrderManager.cpp
     src/me/OrderBook.cpp
 )
-target_include_directories(me_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/me)
+# PUBLIC because MatchingEngine.h (a me_core header) includes RiskManager.h, so
+# every consumer of me_core needs the risk_manager directory on its include path.
+target_include_directories(me_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/me
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/risk_manager
+)
 target_link_libraries(me_core PRIVATE project_warnings project_options)
 
 # -----------------------------------------------------------------------------

@@ -14,7 +14,8 @@ class MatchingEngine {
         Matcher<InputCont, T> matcher;
         RiskManager risk_manager;
     public:
-        MatchingEngine(std::shared_ptr<InputCont<T>> event_container, RiskParams risk_params);
+        // RiskParams defaults so existing call sites need not opt in explicitly.
+        MatchingEngine(std::shared_ptr<InputCont<T>> event_container, RiskParams risk_params = {});
         ~MatchingEngine();
 
         MatchingEngine(const MatchingEngine&) = delete;
@@ -50,12 +51,11 @@ MatchingEngine<InputCont, T>::~MatchingEngine() {
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
 std::optional<order_id_t> MatchingEngine<InputCont, T>::addOrder(int price, int quantity, OrderType type, OrderSide side) {
+    const auto book_top = side==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
     std::optional<int> top_book_price = std::nullopt;
-    const auto& book_top = side==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
     if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
-    bool is_valid = risk_manager(price, quantity, top_book_price);
 
-    if(!is_valid) return std::nullopt;
+    if(!risk_manager.runAllChecks(price, quantity, top_book_price)) return std::nullopt;
 
     order_id_t order_id = order_book->addOrder(price, quantity, type, side);
 
@@ -87,13 +87,13 @@ bool MatchingEngine<InputCont, T>::cancelOrder(order_id_t orderId) {
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
 std::optional<order_id_t> MatchingEngine<InputCont, T>::modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type) {
+    // The modified order is checked against the side and price it is moving TO.
+    const auto book_top = newSide==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
     std::optional<int> top_book_price = std::nullopt;
-    const auto& book_top = side==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
     if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
-    bool is_valid = risk_manager(price, quantity, top_book_price);
 
-    if(!is_valid) return std::nullopt;
-    
+    if(!risk_manager.runAllChecks(newPrice, newQuantity, top_book_price)) return std::nullopt;
+
     auto modified_order_id = order_book->modifyOrder(orderId, newQuantity, newPrice, newSide, type);
     if (modified_order_id) {
         // Both ids are logged because a reprice retires the original order and
