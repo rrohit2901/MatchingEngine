@@ -2,6 +2,7 @@
 
 #include "Matcher.h"
 #include "EventManager.h"
+#include "RiskManager.h"
 
 template<template<typename> class InputCont, typename T = std::unique_ptr<Event>>
 requires validInputContConsumer<InputCont<T>, T>
@@ -11,8 +12,9 @@ class MatchingEngine {
         std::shared_ptr<OrderBook> order_book;
         std::shared_ptr<EventManager<InputCont, T>> event_manager;
         Matcher<InputCont, T> matcher;
+        RiskManager risk_manager;
     public:
-        MatchingEngine(std::shared_ptr<InputCont<T>> event_container);
+        MatchingEngine(std::shared_ptr<InputCont<T>> event_container, RiskParams risk_params);
         ~MatchingEngine();
 
         MatchingEngine(const MatchingEngine&) = delete;
@@ -22,7 +24,7 @@ class MatchingEngine {
         std::vector<std::shared_ptr<BookLevel>> getSellSideView(int numLevels = 1) const;
         std::pair<std::vector<std::shared_ptr<BookLevel>>, std::vector<std::shared_ptr<BookLevel>>> getOrderBookView(int numLevels = 1) const;
 
-        order_id_t addOrder(int price, int quantity, OrderType type, OrderSide side);
+        std::optional<order_id_t> addOrder(int price, int quantity, OrderType type, OrderSide side);
         bool cancelOrder(order_id_t orderId);
         std::optional<order_id_t> modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type);
 };
@@ -31,10 +33,11 @@ class MatchingEngine {
 // the destructor guarantees every event in between is enclosed by a pair.
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
-MatchingEngine<InputCont, T>::MatchingEngine(std::shared_ptr<InputCont<T>> event_container)
+MatchingEngine<InputCont, T>::MatchingEngine(std::shared_ptr<InputCont<T>> event_container, RiskParams risk_params)
     : order_book{std::make_shared<OrderBook>()},
       event_manager{std::make_shared<EventManager<InputCont, T>>(event_container)},
-      matcher{order_book, event_manager} {
+      matcher{order_book, event_manager},
+      risk_manager{risk_params} {
     event_manager->addSessionOpenEvent();
 }
 
@@ -46,7 +49,14 @@ MatchingEngine<InputCont, T>::~MatchingEngine() {
 
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
-order_id_t MatchingEngine<InputCont, T>::addOrder(int price, int quantity, OrderType type, OrderSide side) {
+std::optional<order_id_t> MatchingEngine<InputCont, T>::addOrder(int price, int quantity, OrderType type, OrderSide side) {
+    std::optional<int> top_book_price = std::nullopt;
+    const auto& book_top = side==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
+    if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
+    bool is_valid = risk_manager(price, quantity, top_book_price);
+
+    if(!is_valid) return std::nullopt;
+
     order_id_t order_id = order_book->addOrder(price, quantity, type, side);
 
     if (type == OrderType::MARKET) {
@@ -77,6 +87,13 @@ bool MatchingEngine<InputCont, T>::cancelOrder(order_id_t orderId) {
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
 std::optional<order_id_t> MatchingEngine<InputCont, T>::modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type) {
+    std::optional<int> top_book_price = std::nullopt;
+    const auto& book_top = side==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
+    if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
+    bool is_valid = risk_manager(price, quantity, top_book_price);
+
+    if(!is_valid) return std::nullopt;
+    
     auto modified_order_id = order_book->modifyOrder(orderId, newQuantity, newPrice, newSide, type);
     if (modified_order_id) {
         // Both ids are logged because a reprice retires the original order and
