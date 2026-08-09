@@ -17,7 +17,7 @@ cmake --build build-release -j
 | | |
 |---|---|
 | Date | 2026-08-06 |
-| Commit | `7265687` (plus reject-event changes) |
+| Commit | `7265687` (plus reject-event changes); `bench_latency` P50s re-verified on `74f1cc1` |
 | CPU | 12th Gen Intel Core i7-1250U (12 threads) |
 | Compiler | g++ 11.4.0 |
 | Build | Release — `-O3 -march=native -DNDEBUG` |
@@ -26,6 +26,12 @@ cmake --build build-release -j
 
 CPU frequency scaling was **not** pinned, so absolute numbers move a few percent
 run to run. P50s were stable across three runs (±5%); tails were not.
+
+`me_core` gained `POSITION_INDEPENDENT_CODE` when the Python bindings landed, since
+a static library cannot otherwise link into a shared module. A/B'd against a
+non-PIC build in the same session: PIC was equal or faster on every P50 (add 87 vs
+114, modify 224 vs 224, cancel 142 vs 145), i.e. the difference is inside run-to-run
+noise. The figures below stand.
 
 ## Per-operation latency (`bench_latency`)
 
