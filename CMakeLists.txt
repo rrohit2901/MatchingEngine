@@ -22,7 +22,20 @@ endif()
  
 # Compile commands json for clangd / IDE integration
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
- 
+
+# -----------------------------------------------------------------------------
+# Build options. Every default reproduces the historical build exactly, so
+#   cmake -S . -B build && cmake --build build && ctest --test-dir build
+# is unaffected by their existence. The wheel build (scikit-build-core, see
+# pyproject.toml) turns tests/bench/apps off and python on, so `pip install .`
+# never clones googletest or benchmark.
+# -----------------------------------------------------------------------------
+option(ME_BUILD_TESTS  "Build the GoogleTest unit tests"                  ON)
+option(ME_BUILD_BENCH  "Build the Google Benchmark suites"                ON)
+option(ME_BUILD_APPS   "Build the me_main demo executable"                ON)
+option(ME_BUILD_PYTHON "Build the pybind11 extension module"              OFF)
+option(ME_NATIVE_ARCH  "Tune Release builds for this CPU (-march=native)" ON)
+
 # -----------------------------------------------------------------------------
 # Warning flags applied via an interface target (modern pattern)
 # Link any target against `project_warnings` to inherit these.
@@ -37,9 +50,13 @@ target_compile_options(project_warnings INTERFACE
 )
  
 # Performance flags for Release (Debug already has -O0 -g by default)
+# -march=native is behind ME_NATIVE_ARCH: a binary built with it dies with SIGILL
+# on any machine older than the one that built it, which is fine locally and fatal
+# for a redistributable wheel. With the option ON (the default) this expands
+# exactly as it always did.
 add_library(project_options INTERFACE)
 target_compile_options(project_options INTERFACE
-    $<$<CONFIG:Release>:-O3 -march=native -DNDEBUG>
+    $<$<CONFIG:Release>:-O3 $<$<BOOL:${ME_NATIVE_ARCH}>:-march=native> -DNDEBUG>
     $<$<CONFIG:Debug>:-O0 -g3 -fno-omit-frame-pointer>
 )
  
@@ -51,24 +68,32 @@ include(FetchContent)
 # The logger runs on its own thread and LockQueue uses std::mutex/condition_variable.
 find_package(Threads REQUIRED)
 
+# Each dependency is fetched only when the thing that needs it is being built, so
+# a Python-only configure (pip install .) clones neither. benchmark does not need
+# googletest here because BENCHMARK_ENABLE_TESTING is forced OFF below.
+
 # GoogleTest
-FetchContent_Declare(
-    googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG        v1.14.0
-)
- 
+if(ME_BUILD_TESTS)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG        v1.14.0
+    )
+    FetchContent_MakeAvailable(googletest)
+endif()
+
 # Google Benchmark
-set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    benchmark
-    GIT_REPOSITORY https://github.com/google/benchmark.git
-    GIT_TAG        v1.8.3
-)
- 
-FetchContent_MakeAvailable(googletest benchmark)
- 
+if(ME_BUILD_BENCH)
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        benchmark
+        GIT_REPOSITORY https://github.com/google/benchmark.git
+        GIT_TAG        v1.8.3
+    )
+    FetchContent_MakeAvailable(benchmark)
+endif()
+
 # -----------------------------------------------------------------------------
 # Core library
 # -----------------------------------------------------------------------------
@@ -86,19 +111,29 @@ target_include_directories(me_core PUBLIC
 )
 target_link_libraries(me_core PRIVATE project_warnings project_options)
 
+# The Python extension is a shared object, so every object linked into it must be
+# position independent; without this the module fails to link on x86-64 with
+# R_X86_64_32S relocation errors. Set unconditionally rather than behind
+# ME_BUILD_PYTHON so there is one build of me_core instead of a PIC and a non-PIC
+# variant that can drift apart — the hot path has no globals, so the extra
+# indirection does not show up in bench/.
+set_target_properties(me_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # -----------------------------------------------------------------------------
 # Main executable
 # -----------------------------------------------------------------------------
-add_executable(me_main src/main.cpp)
-target_link_libraries(me_main PRIVATE
-    me_core
-    me_ds_lock          # LockQueue
-    me_event_handler    # Logger
-    Threads::Threads
-    project_warnings
-    project_options
-)
- 
+if(ME_BUILD_APPS)
+    add_executable(me_main src/main.cpp)
+    target_link_libraries(me_main PRIVATE
+        me_core
+        me_ds_lock          # LockQueue
+        me_event_handler    # Logger
+        Threads::Threads
+        project_warnings
+        project_options
+    )
+endif()
+
 # -----------------------------------------------------------------------------
 # Lock-based data structures (practice) — header-only.
 # Headers live in include/data_structures/; there is no .cpp, so this is an
@@ -119,10 +154,24 @@ target_link_libraries(me_event_handler INTERFACE me_core Threads::Threads)
 # -----------------------------------------------------------------------------
 # Tests
 # -----------------------------------------------------------------------------
-enable_testing()
-add_subdirectory(tests)
- 
+if(ME_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 # -----------------------------------------------------------------------------
 # Benchmarks
 # -----------------------------------------------------------------------------
-add_subdirectory(bench)
+if(ME_BUILD_BENCH)
+    add_subdirectory(bench)
+endif()
+
+# -----------------------------------------------------------------------------
+# Python bindings (opt-in; scikit-build-core sets ME_BUILD_PYTHON=ON)
+# Last in the file on purpose: the module links me_ds_lock and me_event_handler,
+# and unlike me_main a subdirectory cannot forward-reference targets that do not
+# exist yet.
+# -----------------------------------------------------------------------------
+if(ME_BUILD_PYTHON)
+    add_subdirectory(src/python)
+endif()

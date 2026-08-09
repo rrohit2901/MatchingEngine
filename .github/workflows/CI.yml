@@ -35,3 +35,28 @@ jobs:
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
+
+  python-bindings:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+
+      # No FetchContent cache: with tests and benchmarks off, this configure
+      # clones nothing — pip supplies pybind11 to the isolated build environment.
+      - name: Build and install the extension
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install '.[test]' -v
+
+      - name: Run Python tests
+        run: python -m pytest tests/python -v
