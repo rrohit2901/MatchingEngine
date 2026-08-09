@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(matching_engine
     VERSION 0.1.0
-    DESCRIPTION "Lock Free single-symbol matching engine"
+    DESCRIPTION "Single-symbol limit order book matching engine"
     LANGUAGES CXX
 )
  
