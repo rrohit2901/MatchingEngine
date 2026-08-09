@@ -1,0 +1,40 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12,<4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "matching-engine"
+version = "0.1.0"                # keep in step with project(VERSION) in CMakeLists.txt
+description = "Python bindings for a single-symbol C++ matching engine"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = ">=3.20"
+cmake.build-type = "Release"
+# Under build*/, which .gitignore already covers. The wheel tag keeps it clear of
+# a developer's own build/ tree and makes rebuilds incremental.
+build-dir = "build/wheel-{wheel_tag}"
+wheel.packages = ["python/matching_engine"]
+sdist.exclude = ["logs/", ".vscode/", ".claude/"]
+
+# Only the extension is wanted here: the C++ tests and benchmarks would drag
+# googletest and Google Benchmark in over the network for no reason.
+# ME_NATIVE_ARCH is left at its default ON, which is right for `pip install .` on
+# the machine that will run it. A redistributable wheel wants -DME_NATIVE_ARCH=OFF.
+[tool.scikit-build.cmake.define]
+ME_BUILD_PYTHON = "ON"
+ME_BUILD_TESTS = "OFF"
+ME_BUILD_BENCH = "OFF"
+ME_BUILD_APPS = "OFF"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
