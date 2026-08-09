@@ -19,13 +19,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++
 
+      # The repository name is part of the key on purpose. FetchContent's
+      # *-subbuild trees bake in absolute paths, and the workspace path contains
+      # the repository name — so a cache saved under a different name restores
+      # into a workspace it does not describe and the configure fails outright.
+      # Keying on the name means a rename busts the cache instead of poisoning it.
       - name: Cache FetchContent dependencies
         uses: actions/cache@v4
         with:
           path: build/_deps
-          key: ${{ runner.os }}-fetchcontent-${{ hashFiles('CMakeLists.txt') }}
+          key: ${{ runner.os }}-fetchcontent-v2-${{ github.event.repository.name }}-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: |
-            ${{ runner.os }}-fetchcontent-
+            ${{ runner.os }}-fetchcontent-v2-${{ github.event.repository.name }}-
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
