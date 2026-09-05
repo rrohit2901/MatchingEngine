@@ -16,29 +16,46 @@ Every figure includes one `steady_clock::now()` pair (~27 ns) — subtract it.
 
 | operation | P50 | P99 | P99.9 |
 |---|---:|---:|---:|
-| OrderBook add | 87 ns | 273 ns | 1,892 ns |
-| OrderBook modify | 221 ns | 498 ns | 807 ns |
-| OrderBook cancel | 150 ns | 289 ns | 429 ns |
-| Engine add | 710 ns | 5,177 ns | 42,822 ns |
-| Engine modify | 1,348 ns | 16,336 ns | 75,487 ns |
-| Engine cancel | 502 ns | 3,193 ns | 45,081 ns |
+| OrderBook add | 82 ns | 188 ns | 1,382 ns |
+| OrderBook modify | 217 ns | 289 ns | 574 ns |
+| OrderBook cancel | 148 ns | 251 ns | 459 ns |
+| Engine add | 768 ns | 2,372 ns | 52,823 ns |
+| Engine modify | 827 ns | 2,359 ns | 22,365 ns |
+| Engine cancel | 452 ns | 1,482 ns | 10,276 ns |
 
 `OrderBook` rows are the book in isolation. `Engine` rows add risk checks, matching, and
 event publishing.
 
-**Where the 710 ns goes.** The book is not the bottleneck:
+**The event queue is now lock-free.** The engine/logger handoff used to be the two-mutex
+`LockQueue`; it is now a bounded SPSC ring buffer, `RingBuffer<T, 128>`. Both measured in
+the same run of the same build:
+
+| Engine operation | P50 (LockQueue → ring) | P99 (LockQueue → ring) | P99.9 (LockQueue → ring) |
+|---|---:|---:|---:|
+| add | 699 → 768 ns | 5,987 → 2,372 ns | 65,548 → 52,823 ns |
+| modify | 1,755 → 827 ns | 22,523 → 2,359 ns | 100,405 → 22,365 ns |
+| cancel | 750 → 452 ns | 5,893 → 1,482 ns | 98,294 → 10,276 ns |
+
+The tail is where it shows, because publishing no longer contends with the draining
+thread for a mutex. At P50 `modify` and `cancel` roughly halve. `add` is a wash — across
+four runs it landed either side of the old figure, since a single add publishes one event
+and the queue is a smaller share of its cost.
+
+**Where the 768 ns goes.** The book is not the bottleneck, and now neither is the queue:
 
 | component | P50 |
 |---|---:|
-| `LockQueue::push` (one event, consumer draining) | 266 ns |
+| `RingBuffer<128>::push` (one event, consumer draining) | 96 ns |
+| — of which `make_unique<TradeEvent>` | 44 ns |
 | `RiskManager` checks | 28 ns |
-| `OrderBook::addOrder` | 87 ns |
+| `OrderBook::addOrder` | 82 ns |
 
-Event publishing costs three times an entire book insert — two heap allocations
-(`make_unique<Event>`, then `make_shared` inside `push`) plus a mutex, on every order.
-Producer/consumer contention on the same lock is also what produces the 40–75 µs P99.9
-figures. Replacing the queue with a bounded ring buffer of pre-allocated POD events is the
-next piece of work, and it is where the remaining latency is.
+Publishing fell from 217 ns to 96 ns (both re-measured in this session; the 266 ns
+quoted here previously was an earlier run), and roughly half of what is left is the event
+allocation rather than the queue itself. Removing that means pre-allocated POD events
+constructed in place in the ring, which is the next piece of work. Matching accounts for
+most of the balance: `tryMatch` performs a modify-shaped book mutation even when nothing
+crosses.
 
 Full methodology, caveats, and the Google Benchmark suites: [`bench/README.md`](bench/README.md).
 
@@ -94,13 +111,14 @@ add_order ──> RiskManager ──> OrderBook ──> Matcher ──> TradeEve
               reject             └── OrderBookSide<BUY|SELL>
                   │                       └── BookLevel ──> OrderManager
                   ▼                                              (owns Order)
-              EventManager ──> LockQueue ──> Logger thread ──> log file
+              EventManager ──> RingBuffer<128> ──> Logger thread ──> log file
 ```
 
 The matching path is single-threaded and deliberately so — determinism matters more than
 parallelism for a single symbol. The only thing shared across threads is the event queue:
 the engine pushes, the logger drains and does all the file I/O, so no write ever lands on
-the hot path.
+the hot path. That handoff is exactly one producer and one consumer, which is what lets it
+be a lock-free SPSC ring rather than a general-purpose queue.
 
 | type | role |
 |---|---|
@@ -111,7 +129,8 @@ the hot path.
 | `OrderManager` | owns every live `Order`; mints ids |
 | `Matcher` | crosses an incoming order against the opposite side |
 | `RiskManager` | pre-trade fat-finger checks |
-| `LockQueue<T>` | two-mutex queue; the engine/logger handoff |
+| `RingBuffer<T, N>` | bounded lock-free SPSC ring; the engine/logger handoff |
+| `LockQueue<T>` | two-mutex queue; still used by the tests and the Python binding |
 | `Logger` | drains the queue on its own thread |
 
 ## Design notes
@@ -129,6 +148,16 @@ queue position; a reprice, a quantity increase, or a side flip retires the order
 replacement under a fresh id. `modifyOrder` returns the surviving id, so callers must use the
 returned value rather than assume.
 
+**The ring buffer has no shared counter.** The obvious SPSC design keeps an atomic size
+that both threads mutate, but that makes every push and pop a read-modify-write on one
+cache line two cores are fighting over — which is the contention a lock-free queue exists
+to avoid. `RingBuffer` instead keeps monotonically increasing `_head` and `_tail`, each
+written by exactly one thread, so a release store and an acquire load carry all the
+ordering and no RMW is needed anywhere. Each thread also caches the other's index and only
+refreshes it when the ring looks full (producer) or empty (consumer), so in steady state
+neither core touches the other's line. Capacity must be a power of two: indices are masked
+rather than divided, and it keeps the counters exact if `size_t` ever wraps.
+
 **The Python binding owns the wiring.** `MatchingEngine`'s constructor takes an event queue
 that nothing drains unless a `Logger` runs alongside it, and the engine must be destroyed
 *before* the logger is stopped or the final `SESSION_CLOSE` never reaches the file. Rather
@@ -144,8 +173,15 @@ Honest list, since some of these look like features from the outside:
 - **Market orders are not fully implemented** — a `MARKET` order is booked at the price passed
   in and only changes which event is emitted. It does not sweep the book at any price.
 - **No IOC, FOK, stop, or iceberg orders**, and no self-trade prevention.
-- **The event queue uses a mutex** and is the dominant cost on the hot path (see above).
-  Nothing in this repository is lock-free.
+- **The event queue is SPSC only.** `RingBuffer` assumes exactly one producer thread and
+  one consumer thread; two producers will both observe free space and write the same slot.
+  It is not a general-purpose queue.
+- **The event queue is bounded.** If the logger stalls on disk, the matching thread spins
+  in `push()` rather than allocating. That is backpressure instead of unbounded memory
+  growth, but it does mean file I/O can now stall the producer — which `LockQueue` never
+  did. 128 slots absorbs the burst from one sweeping order, not a long flush.
+- **Events are still heap-allocated.** `make_unique<Event>` per publish is ~44 ns and is
+  now about half the remaining publish cost (see above).
 - **No order book snapshot or recovery** — state lives in memory for the life of the process.
 - Risk checks are fat-finger limits only: max/min quantity and distance from top of book.
 
@@ -154,8 +190,8 @@ Honest list, since some of these look like features from the outside:
 ```
 include/me/              engine headers (templated: MatchingEngine, Matcher, EventManager)
 include/risk_manager/    RiskManager, RiskParams
-include/data_structures/ LockQueue
-include/event_handler/   Logger
+include/data_structures/ LockQueue, RingBuffer (lock-free SPSC)
+include/event_handler/   Logger, EventQueue.h (binds the ring buffer capacity)
 src/me/                  engine sources
 src/python/              pybind11 module
 src/main.cpp             demo driver
@@ -185,4 +221,7 @@ Requires CMake 3.20+, a C++20 compiler (tested on g++ 11.4), and Python 3.9+ for
 
 - A C++ feed handler replaying LOBSTER market data through the engine.
 - A Python alpha simulator on top of it.
-- Replacing the mutex event queue with a bounded SPSC ring buffer of POD events.
+- Pre-allocated POD events constructed in place in the ring, removing the per-publish
+  `make_unique` that is now half the publish cost.
+- Moving the Python binding off `LockQueue`, which needs the SPSC contract argued for a
+  facade whose engine can be driven from different OS threads across calls.

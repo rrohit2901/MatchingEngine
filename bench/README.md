@@ -16,8 +16,8 @@ cmake --build build-release -j
 
 | | |
 |---|---|
-| Date | 2026-08-06 |
-| Commit | `7265687` (plus reject-event changes); `bench_latency` P50s re-verified on `74f1cc1` |
+| Date | 2026-08-19 |
+| Commit | `bb59657` plus the lock-free event queue change |
 | CPU | 12th Gen Intel Core i7-1250U (12 threads) |
 | Compiler | g++ 11.4.0 |
 | Build | Release — `-O3 -march=native -DNDEBUG` |
@@ -25,7 +25,10 @@ cmake --build build-release -j
 | Timer overhead | ~27 ns per `steady_clock::now()` pair — subtract from every figure |
 
 CPU frequency scaling was **not** pinned, so absolute numbers move a few percent
-run to run. P50s were stable across three runs (±5%); tails were not.
+run to run. P50s were stable across three runs (±5%); tails were not. The figures
+below come from a single run (timer overhead 27 ns) so every row shares machine
+conditions; where a claim depends on the difference between two rows it was
+checked across four runs and that is called out.
 
 `me_core` gained `POSITION_INDEPENDENT_CODE` when the Python bindings landed, since
 a static library cannot otherwise link into a shared module. A/B'd against a
@@ -39,12 +42,15 @@ All values in nanoseconds.
 
 | operation | P50 | P99 | P99.9 | mean |
 |---|---:|---:|---:|---:|
-| OrderBook add | 87 | 273 | 1,892 | 167 |
-| OrderBook modify | 221 | 498 | 807 | 291 |
-| OrderBook cancel | 150 | 289 | 429 | 171 |
-| Engine add | 710 | 5,177 | 42,822 | 1,367 |
-| Engine modify | 1,348 | 16,336 | 75,487 | 2,224 |
-| Engine cancel | 502 | 3,193 | 45,081 | 814 |
+| OrderBook add | 82 | 188 | 1,382 | 118 |
+| OrderBook modify | 217 | 289 | 574 | 241 |
+| OrderBook cancel | 148 | 251 | 459 | 189 |
+| Engine add `[LockQueue]` | 699 | 5,987 | 65,548 | 1,472 |
+| Engine add `[RingBuf/128]` | 768 | 2,372 | 52,823 | 1,110 |
+| Engine modify `[LockQueue]` | 1,755 | 22,523 | 100,405 | 2,811 |
+| Engine modify `[RingBuf/128]` | 827 | 2,359 | 22,365 | 1,122 |
+| Engine cancel `[LockQueue]` | 750 | 5,893 | 98,294 | 1,554 |
+| Engine cancel `[RingBuf/128]` | 452 | 1,482 | 10,276 | 642 |
 
 `OrderBook` rows measure the book in isolation. `Engine` rows are the same
 operation through `MatchingEngine`, which adds risk checks, event publishing and
@@ -52,30 +58,71 @@ matching. Engine benchmarks run with a background thread draining the event
 queue and discarding — the Logger's role without its file I/O, so the figure is
 the producer-side cost on the hot path.
 
+`RingBuf/128` is the production configuration (`kEventQueueCapacity` in
+`include/event_handler/EventQueue.h`); `LockQueue` is kept as the baseline the
+change is measured against. `bench_latency` builds both, so the comparison is one
+run rather than two builds.
+
+**Read the tails, not the P50.** P99 and P99.9 improve on every operation, which
+is the mutex contention going away. At P50 only `modify` and `cancel` improve
+consistently; across four runs `Engine add` P50 landed on both sides of the
+`LockQueue` figure (430/764/699/750 vs 354/749/768/701), so treat add's P50 as
+unchanged.
+
 ## Where the Engine overhead goes
 
-Measured separately, same build:
+Measured with the same payload as the engine publishes
+(`make_unique<TradeEvent>` + one push, consumer draining), 500k samples, median
+of three runs:
 
-| component | P50 |
-|---|---:|
-| `LockQueue::push` (one event), consumer draining | 266 ns |
-| `LockQueue::push` (one event), no consumer | 206 ns |
-| `RiskManager::runAllChecks` | 28 ns |
+| component | P50 | P99 | P99.9 |
+|---|---:|---:|---:|
+| `LockQueue::push` (one event), consumer draining | 217 ns | 2,557 ns | 10,956 ns |
+| `RingBuffer<128>::push` (one event), consumer draining | 96 ns | 755 ns | 864 ns |
+| — of which `make_unique<TradeEvent>` alone | 44 ns | 69 ns | — |
+| `RiskManager::runAllChecks` | 28 ns | | |
 
-- **Event publishing dominates.** ~266 ns per operation — more than 3x an entire
-  `OrderBook` add. That is `make_unique<Event>` plus `make_shared` inside
-  `LockQueue::push` plus a mutex, on every order. Contention with the drain
-  thread adds ~60 ns at P50 and far more in the tail: `wait_and_pop` takes
-  `tail_mutex` on every predicate re-check, so consumer and producer contend for
-  the same lock. That is the source of the 40-75 us P99.9 figures.
+- **Publishing is no longer the dominant cost.** 217 ns -> 96 ns at P50, and
+  10,956 ns -> 864 ns at P99.9. `LockQueue::push` did two heap allocations
+  (`make_unique<Event>`, then `make_shared` inside `push`) and took a mutex that
+  `wait_and_pop` re-acquires on every predicate re-check, so producer and
+  consumer contended for the same lock — that was the source of the tens-of-µs
+  tails. The ring buffer does one release store and no allocation of its own.
+- **What is left is the allocation.** 44 of the remaining 96 ns is
+  `make_unique<TradeEvent>`. Pre-allocated POD events constructed in place in the
+  ring would remove it; that is the next piece of work on this path.
 - **Risk checks are effectively free.** 28 ns is within timer noise.
 - **Matching costs a second book mutation.** `tryMatch` runs `getOrderView` +
   `fillOrders` + `modifyOrder` even when nothing crosses, so
-  Engine add ~= book add (87) + event (266) + a modify-shaped operation (~280).
+  Engine add ~= book add (82) + event (96) + a modify-shaped operation (~280),
+  and matching is now the largest single component.
 
-The optimisation target, if the hot path ever needs to go below ~200 ns, is the
-queue rather than the engine: pre-allocated POD events in a bounded ring buffer
-would remove both allocations and the lock.
+## Ring buffer capacity: a negative result
+
+`bench_latency` sweeps the ring at 128 / 1K / 8K / 64K slots. **Capacity makes no
+measurable difference.** Across repeated runs the spread between 128 and 65,536
+stays inside run-to-run noise at every percentile with no consistent ordering,
+and a control run with a **2-slot** ring matched 65,536:
+
+| Engine add | P50 | P99 | P99.9 | mean |
+|---|---:|---:|---:|---:|
+| `RingBuf/2` | 771 | 1,623 | 30,290 | 966 |
+| `RingBuf/128` | 770 | 2,124 | 25,193 | 1,019 |
+| `RingBuf/1K` | 771 | 2,111 | 19,319 | 1,005 |
+| `RingBuf/8K` | 812 | 2,388 | 39,909 | 1,121 |
+| `RingBuf/64K` | 732 | 2,110 | 18,436 | 976 |
+
+That is not surprising once you look at the drain thread: it discards events and
+does no I/O, so it never falls behind, the ring sits near-empty, and `push()`
+essentially never spins. Capacity only buys anything while the consumer is
+stalled — which is exactly what this harness excludes by design, since it
+measures producer-side cost.
+
+So the win over `LockQueue` is the lock-free protocol itself, not queue depth.
+Sizing the production queue is a question about the logger's worst-case I/O
+pause, and answering it needs a harness whose consumer actually blocks on a
+file. 128 was chosen to absorb the burst a single sweeping order emits, not
+measured against a stall.
 
 ## Google Benchmark suites
 
