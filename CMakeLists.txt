@@ -126,7 +126,7 @@ if(ME_BUILD_APPS)
     add_executable(me_main src/main.cpp)
     target_link_libraries(me_main PRIVATE
         me_core
-        me_ds_lock          # LockQueue
+        me_ds_lockfree      # SPSC RingBuffer behind EventQueue.h
         me_event_handler    # Logger
         Threads::Threads
         project_warnings
@@ -145,11 +145,21 @@ add_library(me_ds_lock INTERFACE)
 target_include_directories(me_ds_lock INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include/data_structures)
 
 # -----------------------------------------------------------------------------
+# Lock-free data structures — header-only (SPSC ring buffer).
+# This no longer needs a compile-check TU to force instantiation: EventQueue.h
+# instantiates RingBuffer<unique_ptr<Event>, 128> for the logger pipeline, so
+# anything building me_main / bench_latency type-checks the header for real.
+# -----------------------------------------------------------------------------
+add_library(me_ds_lockfree INTERFACE)
+target_include_directories(me_ds_lockfree INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include/data_structures)
+target_link_libraries(me_ds_lockfree INTERFACE Threads::Threads)
+
+# -----------------------------------------------------------------------------
 # Event handler (Logger) — header-only, consumes the event queue off the hot path.
 # -----------------------------------------------------------------------------
 add_library(me_event_handler INTERFACE)
 target_include_directories(me_event_handler INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include/event_handler)
-target_link_libraries(me_event_handler INTERFACE me_core Threads::Threads)
+target_link_libraries(me_event_handler INTERFACE me_core me_ds_lockfree Threads::Threads)
 
 # -----------------------------------------------------------------------------
 # Tests

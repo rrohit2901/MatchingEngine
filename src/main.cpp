@@ -1,6 +1,6 @@
 #include "MatchingEngine.h"
 #include "Logger.h"
-#include "lock_queue.h"
+#include "EventQueue.h"
 
 #include <filesystem>
 #include <iostream>
@@ -10,7 +10,7 @@
 
 namespace {
 
-using EventQueue = LockQueue<std::unique_ptr<Event>>;
+using EventQueue = EventRingBuffer<std::unique_ptr<Event>>;
 
 constexpr const char* kLogFile = "logs/matching_engine.log";
 
@@ -33,7 +33,7 @@ void printSide(const char* label, const std::vector<std::shared_ptr<BookLevel>>&
 // Everything the matching thread does. Kept in its own scope so the engine is
 // destroyed — and SESSION_CLOSE published — before the sentinel is queued.
 void runMatchingEngine(const std::shared_ptr<EventQueue>& events) {
-    MatchingEngine<LockQueue> me{events};
+    MatchingEngine<EventRingBuffer> me{events};
 
     const order_id_t buy1 = me.addOrder(1005, 10, OrderType::LIMIT, OrderSide::BUY).value();
     me.addOrder(1010, 5, OrderType::LIMIT, OrderSide::SELL);
@@ -95,7 +95,7 @@ int main() {
     }
 
     auto events = std::make_shared<EventQueue>();
-    Logger<LockQueue> logger{events, kLogFile};
+    Logger<EventRingBuffer> logger{events, kLogFile};
 
     std::thread logger_thread{[&logger] { logger.readWriteLogs(); }};
 
