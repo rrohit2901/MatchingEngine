@@ -132,18 +132,6 @@ if(ME_BUILD_APPS)
         project_warnings
         project_options
     )
-
-    # Replays prepared LOBSTER market data (scripts/parse_lobster.py output)
-    # through the engine. Same wiring as me_main, plus the CSV reader.
-    add_executable(feed_handler src/feed_handler.cpp)
-    target_link_libraries(feed_handler PRIVATE
-        me_core
-        me_ds_lockfree
-        me_event_handler
-        Threads::Threads
-        project_warnings
-        project_options
-    )
 endif()
 
 # -----------------------------------------------------------------------------

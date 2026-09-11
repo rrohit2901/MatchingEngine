@@ -29,12 +29,12 @@
 #include "Order.h"
 #include "OrderBook.h"
 #include "MatchingEngine.h"
+#include "EventQueue.h"
 #include "lock_queue.h"
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
-using EventQueue = LockQueue<std::unique_ptr<Event>>;
 
 // Prices are ints; this used to be a double that converted at every call site.
 constexpr int kBasePrice = 100;
@@ -187,8 +187,36 @@ Stats measureModify(int n) {
 // Events are drained by a background thread that discards them, mirroring the
 // Logger without its file I/O — the point is the producer-side cost on the hot
 // path, not how fast the consumer writes.
+//
+// Parameterised over the queue so the same measurement runs against the
+// unbounded mutex/condvar LockQueue and the bounded lock-free EventRingBuffer.
+// Both are strictly SPSC here: every push (engine events, the engine's
+// SESSION_OPEN/CLOSE, and the sentinel below) happens on this thread, and the
+// worker below is the only consumer.
+// Capacity sweep. Sizes are unique_ptr<Event> slots (8 B each), so 128 = 1 KiB
+// ... 65536 = 512 KiB, the last of which is past L2 on most desktop parts.
+//
+// Result, so nobody re-runs this expecting a knee: capacity makes no measurable
+// difference here. Across repeated runs the spread between 128 and 65536 stays
+// inside the run-to-run noise at every percentile, and a control run with a
+// 2-slot ring matched 65536. That is not a surprise once you look at the drain
+// thread: it discards events and does no I/O, so it never falls behind, the
+// ring sits near-empty, and push() essentially never spins. Capacity only buys
+// anything while the consumer is stalled -- which is exactly what this harness
+// excludes by design, since it measures producer-side cost.
+//
+// So these rows are a negative result worth keeping: they show the win over
+// LockQueue is the lock-free protocol itself, not queue depth. Sizing the
+// production queue (EventQueue.h) is a question about the logger's worst-case
+// I/O pause, and it needs a harness whose consumer actually blocks on a file.
+template<typename T> using Ring1K  = RingBuffer<T, 1024>;
+template<typename T> using Ring8K  = RingBuffer<T, 8192>;
+template<typename T> using Ring64K = RingBuffer<T, 65536>;
+
+template<template<typename> class Q>
 struct EventDrain {
-    std::shared_ptr<EventQueue> queue{std::make_shared<EventQueue>()};
+    using Queue = Q<std::unique_ptr<Event>>;
+    std::shared_ptr<Queue> queue{std::make_shared<Queue>()};
     std::thread worker;
 
     EventDrain() {
@@ -206,10 +234,10 @@ struct EventDrain {
     }
 };
 
-using Engine = MatchingEngine<LockQueue>;
-
+template<template<typename> class Q>
 Stats measureEngineAdd(int n) {
-    EventDrain drain;
+    using Engine = MatchingEngine<Q>;
+    EventDrain<Q> drain;
     auto engine = std::make_unique<Engine>(drain.queue);
     std::vector<double> s;
     s.reserve(static_cast<std::size_t>(n));
@@ -231,8 +259,10 @@ Stats measureEngineAdd(int n) {
     return summarize(s);
 }
 
+template<template<typename> class Q>
 Stats measureEngineModify(int n) {
-    EventDrain drain;
+    using Engine = MatchingEngine<Q>;
+    EventDrain<Q> drain;
     Engine engine{drain.queue};
     std::vector<double> s;
     s.reserve(static_cast<std::size_t>(n));
@@ -255,8 +285,10 @@ Stats measureEngineModify(int n) {
     return summarize(s);
 }
 
+template<template<typename> class Q>
 Stats measureEngineCancel(int n) {
-    EventDrain drain;
+    using Engine = MatchingEngine<Q>;
+    EventDrain<Q> drain;
     Engine engine{drain.queue};
     for (int level = 0; level < kBookLevels; ++level) {
         engine.addOrder(kBasePrice + level, kQuantity, OrderType::LIMIT, OrderSide::BUY);
@@ -281,15 +313,15 @@ Stats measureEngineCancel(int n) {
 }
 
 void printHeader() {
-    std::printf("%-22s %10s %8s %8s %9s %8s %9s %9s\n",
+    std::printf("%-28s %10s %8s %8s %9s %8s %9s %9s\n",
                 "operation", "samples", "P50", "P99", "P99.9", "min", "max", "mean");
-    std::printf("%-22s %10s %8s %8s %9s %8s %9s %9s\n",
+    std::printf("%-28s %10s %8s %8s %9s %8s %9s %9s\n",
                 "", "", "(ns)", "(ns)", "(ns)", "(ns)", "(ns)", "(ns)");
-    std::printf("-------------------------------------------------------------------------------------------\n");
+    std::printf("-----------------------------------------------------------------------------------------------\n");
 }
 
 void printRow(const std::string& name, const Stats& st) {
-    std::printf("%-22s %10zu %8.1f %8.1f %9.1f %8.1f %9.1f %9.1f\n",
+    std::printf("%-28s %10zu %8.1f %8.1f %9.1f %8.1f %9.1f %9.1f\n",
                 name.c_str(), st.count, st.p50, st.p99, st.p999, st.min, st.max, st.mean);
 }
 
@@ -307,16 +339,29 @@ int main(int argc, char** argv) {
     const double overhead = clockOverheadNs();
 
     std::printf("Per-operation latency  (samples per op: %d)\n"
-                "  OrderBook rows = book only; Engine rows add risk checks, event publishing and matching\n", n);
+                "  OrderBook rows = book only; Engine rows add risk checks, event publishing and matching\n"
+                "  [LockQueue] = unbounded mutex/condvar queue; [RingBuf/N] = bounded lock-free SPSC ring, N slots\n", n);
     std::printf("steady_clock overhead (median of a now() pair): %.1f ns\n\n", overhead);
 
     printHeader();
     printRow("OrderBook add", measureAdd(n));
     printRow("OrderBook modify", measureModify(n));
     printRow("OrderBook cancel", measureCancel(n));
-    printRow("Engine add", measureEngineAdd(n));
-    printRow("Engine modify", measureEngineModify(n));
-    printRow("Engine cancel", measureEngineCancel(n));
+    printRow("Engine add    [LockQueue]",    measureEngineAdd<LockQueue>(n));
+    printRow("Engine add    [RingBuf/128]",  measureEngineAdd<EventRingBuffer>(n));
+    printRow("Engine add    [RingBuf/1K]",   measureEngineAdd<Ring1K>(n));
+    printRow("Engine add    [RingBuf/8K]",   measureEngineAdd<Ring8K>(n));
+    printRow("Engine add    [RingBuf/64K]",  measureEngineAdd<Ring64K>(n));
+    printRow("Engine modify [LockQueue]",    measureEngineModify<LockQueue>(n));
+    printRow("Engine modify [RingBuf/128]",  measureEngineModify<EventRingBuffer>(n));
+    printRow("Engine modify [RingBuf/1K]",   measureEngineModify<Ring1K>(n));
+    printRow("Engine modify [RingBuf/8K]",   measureEngineModify<Ring8K>(n));
+    printRow("Engine modify [RingBuf/64K]",  measureEngineModify<Ring64K>(n));
+    printRow("Engine cancel [LockQueue]",    measureEngineCancel<LockQueue>(n));
+    printRow("Engine cancel [RingBuf/128]",  measureEngineCancel<EventRingBuffer>(n));
+    printRow("Engine cancel [RingBuf/1K]",   measureEngineCancel<Ring1K>(n));
+    printRow("Engine cancel [RingBuf/8K]",   measureEngineCancel<Ring8K>(n));
+    printRow("Engine cancel [RingBuf/64K]",  measureEngineCancel<Ring64K>(n));
 
     std::printf("\nNote: latencies include one steady_clock::now() pair (~%.1f ns); CPU "
                 "frequency scaling is not pinned, so absolute numbers vary run to run.\n",
