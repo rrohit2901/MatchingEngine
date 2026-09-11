@@ -22,13 +22,31 @@ cmake --build build-release -j
 | Compiler | g++ 11.4.0 |
 | Build | Release — `-O3 -march=native -DNDEBUG` |
 | Samples | 300,000 per operation |
-| Timer overhead | ~27 ns per `steady_clock::now()` pair — subtract from every figure |
+| Timer overhead | ~28 ns per `steady_clock::now()` pair — subtract from every figure |
 
-CPU frequency scaling was **not** pinned, so absolute numbers move a few percent
-run to run. The figures below are the **median of four runs**, each pinned to two
-cores (`taskset -c 2,3`) and each reporting 27-30 ns timer overhead, which is this
-machine's quiet-state value; runs reporting more than that were discarded as
-loaded and re-taken.
+### Measurement caveats, learned the hard way
+
+**This CPU thermally throttles under sustained benchmarking, and stays throttled.**
+Running `bench_latency` back to back, the first two runs reported 19-29 ns timer
+overhead and `OrderBook add` P50 of 55-60 ns; runs three through six reported a
+dead-flat 36 ns overhead and 110 ns P50 — nearly 2x worse on identical code, and
+it did not recover. A 90-second cooldown between runs did not restore it either.
+Any comparison that runs build A then build B in a fixed order will therefore
+credit build B with the throttling, which is a large enough effect to invent or
+erase the entire result being measured.
+
+**Use the `OrderBook` rows as a control.** They are untouched by anything on the
+event path, so if they move between two runs, the machine moved, not the code.
+That check is what caught the problem: a comparison table published earlier in
+this session showed `OrderBook add` P99 going 188 -> 565 ns on code that had not
+been edited at all.
+
+The figures below come from a **single run**, so every row shares machine
+conditions, and that run was chosen as the one whose `OrderBook` control rows sit
+closest to the pre-change baseline's (82/217/148 P50). Its P50 controls land
+within 4% (84/226/151), which is what makes the P50 comparison fair. Its P99
+controls are 1.2-1.7x *worse* than the baseline's, so P99 improvements shown here
+are understated rather than flattered.
 
 Two cores, not one: the engine rows run a producer thread and a draining consumer
 thread, so pinning to a single core makes `RingBuffer::push` spin against a
@@ -37,7 +55,8 @@ consumer that cannot be scheduled, and P99.9 blows up to a scheduler quantum
 
 **P99.9 is not trustworthy on this machine.** The `max` column runs to several
 milliseconds under WSL2, so the top 0.1% is measuring scheduler preemption rather
-than the code. Read P50, and P99 with care.
+than the code. It is kept in the tables below for completeness and is deliberately
+absent from the top-level README. Read P50, and P99 with care.
 
 `me_core` gained `POSITION_INDEPENDENT_CODE` when the Python bindings landed, since
 a static library cannot otherwise link into a shared module. A/B'd against a
@@ -51,15 +70,15 @@ All values in nanoseconds.
 
 | operation | P50 | P99 | P99.9 | mean |
 |---|---:|---:|---:|---:|
-| OrderBook add | 85 | 565 | 2,289 | 191 |
-| OrderBook modify | 233 | 912 | 1,908 | 357 |
-| OrderBook cancel | 146 | 530 | 752 | 204 |
-| Engine add `[LockQueue]` | 708 | 6,231 | 100,557 | 1,448 |
-| Engine add `[RingBuf/128]` | 379 | 1,566 | 17,498 | 606 |
-| Engine modify `[LockQueue]` | 1,434 | 11,664 | 141,064 | 2,291 |
-| Engine modify `[RingBuf/128]` | 554 | 2,022 | 30,742 | 832 |
-| Engine cancel `[LockQueue]` | 390 | 2,844 | 77,860 | 747 |
-| Engine cancel `[RingBuf/128]` | 286 | 1,046 | 15,957 | 511 |
+| OrderBook add | 84 | 220 | 1,690 | 134 |
+| OrderBook modify | 226 | 485 | 786 | 268 |
+| OrderBook cancel | 151 | 333 | 587 | 230 |
+| Engine add `[LockQueue]` | 670 | 4,361 | 55,646 | 1,232 |
+| Engine add `[RingBuf/128]` | 383 | 843 | 20,548 | 713 |
+| Engine modify `[LockQueue]` | 1,199 | 8,006 | 54,975 | 1,926 |
+| Engine modify `[RingBuf/128]` | 557 | 1,023 | 21,355 | 732 |
+| Engine cancel `[LockQueue]` | 452 | 3,079 | 27,825 | 672 |
+| Engine cancel `[RingBuf/128]` | 283 | 525 | 1,204 | 353 |
 
 `OrderBook` rows measure the book in isolation. `Engine` rows are the same
 operation through `MatchingEngine`, which adds risk checks, event publishing and
@@ -101,7 +120,7 @@ runs of each binary, interleaved so both see the same machine conditions:
   modest, but its tail — a refill, a slow-path arena lock — is not.
 - **Matching costs a second book mutation.** `tryMatch` runs `getOrderView` +
   `fillOrders` + `modifyOrder` even when nothing crosses, so
-  Engine add ~= book add (85) + publish (77) + a modify-shaped operation, and
+  Engine add ~= book add (84) + publish (77) + a modify-shaped operation, and
   matching is now comfortably the largest single component.
 
 Not re-measured for this change: `RiskManager::runAllChecks` was previously timed
@@ -116,13 +135,14 @@ and a control run with a **2-slot** ring matched 65,536:
 
 | Engine add | P50 | P99 | P99.9 | mean |
 |---|---:|---:|---:|---:|
-| `RingBuf/128` | 379 | 1,566 | 17,498 | 606 |
-| `RingBuf/1K` | 369 | 1,924 | 9,036 | 570 |
-| `RingBuf/8K` | 376 | 1,644 | 14,464 | 614 |
-| `RingBuf/64K` | 378 | 1,510 | 11,608 | 583 |
+| `RingBuf/128` | 383 | 843 | 20,548 | 713 |
+| `RingBuf/1K` | 375 | 808 | 3,955 | 522 |
+| `RingBuf/8K` | 373 | 795 | 13,481 | 490 |
+| `RingBuf/64K` | 394 | 864 | 18,819 | 604 |
 
-(Median of four runs. The `RingBuf/2` control row was from the earlier
-`unique_ptr` build and is not re-measured here; the conclusion is unchanged.)
+(Same single run as the table above. The `RingBuf/2` control row was from the
+earlier `unique_ptr` build and is not re-measured here; the conclusion is
+unchanged — the P50 spread across a 512x range of capacities is under 6%.)
 
 That is not surprising once you look at the drain thread: it discards events and
 does no I/O, so it never falls behind, the ring sits near-empty, and `push()`

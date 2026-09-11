@@ -6,22 +6,24 @@ A single-symbol limit order book matching engine in C++20, with price-time prior
 pre-trade risk checks, an off-hot-path event log, and Python bindings.
 
 Built to find out where the time actually goes in an order path — so it is benchmarked
-per operation at P50/P99/P99.9 rather than in aggregate, and the numbers below include
-the ones that are unflattering.
+per operation at P50 and P99 rather than in aggregate, and the numbers below include the
+ones that are unflattering.
 
 ## Performance
 
-Median of four runs, 300k samples per operation, `-O3 -march=native`, on a 12th-gen
-i7-1250U. Every figure includes one `steady_clock::now()` pair (~27 ns) — subtract it.
+300k samples per operation, `-O3 -march=native`, on a 12th-gen i7-1250U, pinned to two
+cores. Every figure includes one `steady_clock::now()` pair (~28 ns) — subtract it.
+Deeper tail percentiles, and why they are not trustworthy on this machine, are in
+[`bench/README.md`](bench/README.md).
 
-| operation | P50 | P99 | P99.9 |
-|---|---:|---:|---:|
-| OrderBook add | 85 ns | 565 ns | 2,289 ns |
-| OrderBook modify | 233 ns | 912 ns | 1,908 ns |
-| OrderBook cancel | 146 ns | 530 ns | 752 ns |
-| Engine add | 379 ns | 1,566 ns | 17,498 ns |
-| Engine modify | 554 ns | 2,022 ns | 30,742 ns |
-| Engine cancel | 286 ns | 1,046 ns | 15,957 ns |
+| operation | P50 | P99 |
+|---|---:|---:|
+| OrderBook add | 84 ns | 220 ns |
+| OrderBook modify | 226 ns | 485 ns |
+| OrderBook cancel | 151 ns | 333 ns |
+| Engine add | 383 ns | 843 ns |
+| Engine modify | 557 ns | 1,023 ns |
+| Engine cancel | 283 ns | 525 ns |
 
 `OrderBook` rows are the book in isolation. `Engine` rows add risk checks, matching, and
 event publishing.
@@ -35,32 +37,33 @@ publish path allocates nothing.
 Measured directly — construct one `TradeEvent` and push it into the ring with a consumer
 draining, 400k samples, median of five interleaved runs of both binaries:
 
-| publish one event | P50 | P99 | P99.9 |
-|---|---:|---:|---:|
-| `make_unique<TradeEvent>` + ring push | 111 ns | 742 ns | 2,892 ns |
-| construct in the variant + ring push | 77 ns | 124 ns | 641 ns |
+| publish one event | P50 | P99 |
+|---|---:|---:|
+| `make_unique<TradeEvent>` + ring push | 111 ns | 742 ns |
+| construct in the variant + ring push | 77 ns | 124 ns |
 
 The P50 is a third cheaper; the tail is where it really shows, because the allocator is no
 longer in the path at all.
 
-End to end against the previous figures on the same machine and methodology — the
-`OrderBook` rows are the control, unchanged code, and they moved <8%:
+End to end, against the previous figures on the same machine and methodology:
 
 | Engine operation | P50 | P99 |
 |---|---:|---:|
-| add | 768 → 379 ns | 2,372 → 1,566 ns |
-| modify | 827 → 554 ns | 2,359 → 2,022 ns |
-| cancel | 452 → 286 ns | 1,482 → 1,046 ns |
+| add | 768 → 383 ns | 2,372 → 843 ns |
+| modify | 827 → 557 ns | 2,359 → 1,023 ns |
+| cancel | 452 → 283 ns | 1,482 → 525 ns |
 
-**P99.9 is not a usable comparison on this machine** and is reported above only for
-completeness: it is dominated by multi-millisecond scheduler outliers (the `max` column runs
-to several ms under WSL2), and it moved in both directions across the three operations.
+The `OrderBook` rows are the control for that comparison — unchanged code, so they should
+not move. Their P50s match the earlier run within 4% (82/217/148 then, 84/226/151 now),
+which is what makes the P50 column above a fair comparison. Their **P99s are 1.2-1.7x
+worse** than the earlier run (188/289/251 then, 220/485/333 now), so the machine was having
+a worse tail day than the baseline: the P99 improvements are understated, not flattered.
 
-**Where the 379 ns goes.** The book is not the bottleneck, and neither is the queue:
+**Where the 383 ns goes.** The book is not the bottleneck, and neither is the queue:
 
 | component | P50 |
 |---|---:|
-| `OrderBook::addOrder` | 85 ns |
+| `OrderBook::addOrder` | 84 ns |
 | publish one event (construct in variant + ring push) | 77 ns |
 
 Matching accounts for most of the balance: `tryMatch` performs a modify-shaped book mutation
