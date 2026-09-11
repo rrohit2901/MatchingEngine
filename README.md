@@ -85,7 +85,7 @@ ctest --test-dir build --output-on-failure   # 8 suites
 Benchmarks:
 
 ```bash
-./build/bench/bench_latency 300000
+taskset -c 2,3 ./build/bench/bench_latency 300000   # two cores: it is producer + consumer
 ./build/bench/bench_add --benchmark_min_time=0.5s
 ```
 

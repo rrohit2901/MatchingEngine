@@ -8,7 +8,10 @@ whenever the hot path changes.
 ```
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release -j
-./build-release/bench/bench_latency 300000
+
+# two cores, not one -- see the caveats below
+taskset -c 2,3 ./build-release/bench/bench_latency 300000
+
 ./build-release/bench/bench_add     --benchmark_min_time=0.5s
 ./build-release/bench/bench_cancel  --benchmark_min_time=0.5s
 ./build-release/bench/bench_modify  --benchmark_min_time=0.5s
@@ -17,7 +20,7 @@ cmake --build build-release -j
 | | |
 |---|---|
 | Date | 2026-09-11 |
-| Commit | `4d06b23` plus the allocation-free event queue change |
+| Commit | `bd67f70` (allocation-free event queue) |
 | CPU | 12th Gen Intel Core i7-1250U (12 threads) |
 | Compiler | g++ 11.4.0 |
 | Build | Release — `-O3 -march=native -DNDEBUG` |
@@ -37,9 +40,8 @@ erase the entire result being measured.
 
 **Use the `OrderBook` rows as a control.** They are untouched by anything on the
 event path, so if they move between two runs, the machine moved, not the code.
-That check is what caught the problem: a comparison table published earlier in
-this session showed `OrderBook add` P99 going 188 -> 565 ns on code that had not
-been edited at all.
+That check is what caught the problem: an earlier draft of this table showed
+`OrderBook add` P99 going 188 -> 565 ns on code that had not been edited at all.
 
 The figures below come from a **single run**, so every row shares machine
 conditions, and that run was chosen as the one whose `OrderBook` control rows sit
@@ -158,7 +160,9 @@ measured against a stall.
 
 ## Google Benchmark suites
 
-Mean ns/op.
+Mean ns/op. **Not re-measured for the event-queue change** — these cover
+`OrderBook` only, which that change does not touch, so they carry the date of the
+previous run rather than the one in the header above.
 
 | benchmark | ns |
 |---|---:|
