@@ -7,22 +7,26 @@
 #include <string>
 #include <utility>
 
+#include "EventFormatter.h"
 #include "Events.h"
 
-// T is a pointer-like handle to an Event (unique_ptr<Event> by default), so the
-// logger dispatches through `->`. wait_and_pop() returns void on LockQueue, so
+// T is an event value (EventVariant by default), carried through the queue by
+// copy rather than behind a pointer. wait_and_pop() returns void on LockQueue, so
 // this only requires the call to be well-formed, not to yield anything.
-// push() is required as well: stop() enqueues a null T as the shutdown sentinel.
+// push() is required as well: stop() enqueues a default-constructed T as the
+// shutdown sentinel, and is_shutdown() is how the drain loop recognises it --
+// the pair that replaced "push nullptr, test for null".
 template<typename Cont, typename T>
 concept validInputCont = requires (Cont cont, T value, std::shared_ptr<std::ofstream> file) {
     cont.wait_and_pop(value);
     cont.push(T{});
-    value->push_to_file(file);
+    { is_shutdown(value) } -> std::same_as<bool>;
+    write_event(value, file);
 };
 
 // InputCont is a template template parameter because the class stores an
 // InputCont<T>; a plain `typename` could not be written as InputCont<T>.
-template<template<typename> class InputCont, typename T = std::unique_ptr<Event>>
+template<template<typename> class InputCont, typename T = EventVariant>
 requires validInputCont<InputCont<T>, T>
 class Logger {
     private:
@@ -56,11 +60,13 @@ class Logger {
                           << "' — events will be dropped\n";
             }
 
+            // Hoisted out of the loop: default-constructing T per iteration would
+            // build and throw away a sentinel every time round.
+            T log_entry;
             while (true) {
-                T log_entry;
                 input_container->wait_and_pop(log_entry);
-                if (!log_entry) break;  // sentinel: no more events are coming
-                if (writable) log_entry->push_to_file(output_file);
+                if (is_shutdown(log_entry)) break;  // no more events are coming
+                if (writable) write_event(log_entry, output_file);
             }
 
             if (writable) {
@@ -69,9 +75,10 @@ class Logger {
             }
         }
 
-        // Called from the producer side once it is done. Enqueuing a null entry
-        // wakes readWriteLogs() out of its blocking pop; every event queued
-        // before it is still drained first, so no log line is lost.
+        // Called from the producer side once it is done. Enqueuing a
+        // default-constructed entry (the Shutdown alternative) wakes
+        // readWriteLogs() out of its blocking pop; every event queued before it is
+        // still drained first, so no log line is lost.
         void stop() {
             input_container->push(T{});
         }

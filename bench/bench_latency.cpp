@@ -193,8 +193,8 @@ Stats measureModify(int n) {
 // Both are strictly SPSC here: every push (engine events, the engine's
 // SESSION_OPEN/CLOSE, and the sentinel below) happens on this thread, and the
 // worker below is the only consumer.
-// Capacity sweep. Sizes are unique_ptr<Event> slots (8 B each), so 128 = 1 KiB
-// ... 65536 = 512 KiB, the last of which is past L2 on most desktop parts.
+// Capacity sweep. Sizes are EventVariant slots (40 B each), so 128 = 5 KiB
+// ... 65536 = 2.5 MiB, the last of which is past L2 on most desktop parts.
 //
 // Result, so nobody re-runs this expecting a knee: capacity makes no measurable
 // difference here. Across repeated runs the spread between 128 and 65536 stays
@@ -215,21 +215,21 @@ template<typename T> using Ring64K = RingBuffer<T, 65536>;
 
 template<template<typename> class Q>
 struct EventDrain {
-    using Queue = Q<std::unique_ptr<Event>>;
+    using Queue = Q<EventVariant>;
     std::shared_ptr<Queue> queue{std::make_shared<Queue>()};
     std::thread worker;
 
     EventDrain() {
         worker = std::thread([q = queue] {
+            EventVariant event;
             while (true) {
-                std::unique_ptr<Event> event;
                 q->wait_and_pop(event);
-                if (!event) break;
+                if (is_shutdown(event)) break;
             }
         });
     }
     ~EventDrain() {
-        queue->push(nullptr);
+        queue->push(EventVariant{});   // default-constructs the Shutdown sentinel
         worker.join();
     }
 };

@@ -6,56 +6,68 @@ A single-symbol limit order book matching engine in C++20, with price-time prior
 pre-trade risk checks, an off-hot-path event log, and Python bindings.
 
 Built to find out where the time actually goes in an order path — so it is benchmarked
-per operation at P50/P99/P99.9 rather than in aggregate, and the numbers below include
-the ones that are unflattering.
+per operation at P50 and P99 rather than in aggregate, and the numbers below include the
+ones that are unflattering.
 
 ## Performance
 
-P50 latency, 300k samples per operation, `-O3 -march=native`, on a 12th-gen i7-1250U.
-Every figure includes one `steady_clock::now()` pair (~27 ns) — subtract it.
+300k samples per operation, `-O3 -march=native`, on a 12th-gen i7-1250U, pinned to two
+cores. Every figure includes one `steady_clock::now()` pair (~28 ns) — subtract it.
+Deeper tail percentiles, and why they are not trustworthy on this machine, are in
+[`bench/README.md`](bench/README.md).
 
-| operation | P50 | P99 | P99.9 |
-|---|---:|---:|---:|
-| OrderBook add | 82 ns | 188 ns | 1,382 ns |
-| OrderBook modify | 217 ns | 289 ns | 574 ns |
-| OrderBook cancel | 148 ns | 251 ns | 459 ns |
-| Engine add | 768 ns | 2,372 ns | 52,823 ns |
-| Engine modify | 827 ns | 2,359 ns | 22,365 ns |
-| Engine cancel | 452 ns | 1,482 ns | 10,276 ns |
+| operation | P50 | P99 |
+|---|---:|---:|
+| OrderBook add | 84 ns | 220 ns |
+| OrderBook modify | 226 ns | 485 ns |
+| OrderBook cancel | 151 ns | 333 ns |
+| Engine add | 383 ns | 843 ns |
+| Engine modify | 557 ns | 1,023 ns |
+| Engine cancel | 283 ns | 525 ns |
 
 `OrderBook` rows are the book in isolation. `Engine` rows add risk checks, matching, and
 event publishing.
 
-**The event queue is now lock-free.** The engine/logger handoff used to be the two-mutex
-`LockQueue`; it is now a bounded SPSC ring buffer, `RingBuffer<T, 128>`. Both measured in
-the same run of the same build:
+**Events no longer allocate.** The queue used to carry `unique_ptr<Event>`: a `new` on the
+matching thread and a `delete` on the logger thread, which is a cross-thread free and the
+slow path in every general-purpose allocator. Events are now flat structs in a trivially
+copyable `std::variant` (40 bytes) carried by value, so a slot write is a memcpy and the
+publish path allocates nothing.
 
-| Engine operation | P50 (LockQueue → ring) | P99 (LockQueue → ring) | P99.9 (LockQueue → ring) |
-|---|---:|---:|---:|
-| add | 699 → 768 ns | 5,987 → 2,372 ns | 65,548 → 52,823 ns |
-| modify | 1,755 → 827 ns | 22,523 → 2,359 ns | 100,405 → 22,365 ns |
-| cancel | 750 → 452 ns | 5,893 → 1,482 ns | 98,294 → 10,276 ns |
+Measured directly — construct one `TradeEvent` and push it into the ring with a consumer
+draining, 400k samples, median of five interleaved runs of both binaries:
 
-The tail is where it shows, because publishing no longer contends with the draining
-thread for a mutex. At P50 `modify` and `cancel` roughly halve. `add` is a wash — across
-four runs it landed either side of the old figure, since a single add publishes one event
-and the queue is a smaller share of its cost.
+| publish one event | P50 | P99 |
+|---|---:|---:|
+| `make_unique<TradeEvent>` + ring push | 111 ns | 742 ns |
+| construct in the variant + ring push | 77 ns | 124 ns |
 
-**Where the 768 ns goes.** The book is not the bottleneck, and now neither is the queue:
+The P50 is a third cheaper; the tail is where it really shows, because the allocator is no
+longer in the path at all.
+
+End to end, against the previous figures on the same machine and methodology:
+
+| Engine operation | P50 | P99 |
+|---|---:|---:|
+| add | 768 → 383 ns | 2,372 → 843 ns |
+| modify | 827 → 557 ns | 2,359 → 1,023 ns |
+| cancel | 452 → 283 ns | 1,482 → 525 ns |
+
+The `OrderBook` rows are the control for that comparison — unchanged code, so they should
+not move. Their P50s match the earlier run within 4% (82/217/148 then, 84/226/151 now),
+which is what makes the P50 column above a fair comparison. Their **P99s are 1.2-1.7x
+worse** than the earlier run (188/289/251 then, 220/485/333 now), so the machine was having
+a worse tail day than the baseline: the P99 improvements are understated, not flattered.
+
+**Where the 383 ns goes.** The book is not the bottleneck, and neither is the queue:
 
 | component | P50 |
 |---|---:|
-| `RingBuffer<128>::push` (one event, consumer draining) | 96 ns |
-| — of which `make_unique<TradeEvent>` | 44 ns |
-| `RiskManager` checks | 28 ns |
-| `OrderBook::addOrder` | 82 ns |
+| `OrderBook::addOrder` | 84 ns |
+| publish one event (construct in variant + ring push) | 77 ns |
 
-Publishing fell from 217 ns to 96 ns (both re-measured in this session; the 266 ns
-quoted here previously was an earlier run), and roughly half of what is left is the event
-allocation rather than the queue itself. Removing that means pre-allocated POD events
-constructed in place in the ring, which is the next piece of work. Matching accounts for
-most of the balance: `tryMatch` performs a modify-shaped book mutation even when nothing
-crosses.
+Matching accounts for most of the balance: `tryMatch` performs a modify-shaped book mutation
+even when nothing crosses, and that is now the largest single component of an engine add.
 
 Full methodology, caveats, and the Google Benchmark suites: [`bench/README.md`](bench/README.md).
 
@@ -73,7 +85,7 @@ ctest --test-dir build --output-on-failure   # 8 suites
 Benchmarks:
 
 ```bash
-./build/bench/bench_latency 300000
+taskset -c 2,3 ./build/bench/bench_latency 300000   # two cores: it is producer + consumer
 ./build/bench/bench_add --benchmark_min_time=0.5s
 ```
 
@@ -129,6 +141,7 @@ be a lock-free SPSC ring rather than a general-purpose queue.
 | `OrderManager` | owns every live `Order`; mints ids |
 | `Matcher` | crosses an incoming order against the opposite side |
 | `RiskManager` | pre-trade fat-finger checks |
+| `EventVariant` | the event itself — a trivially copyable `std::variant` carried by value |
 | `RingBuffer<T, N>` | bounded lock-free SPSC ring; the engine/logger handoff |
 | `LockQueue<T>` | two-mutex queue; still used by the tests and the Python binding |
 | `Logger` | drains the queue on its own thread |
@@ -158,6 +171,29 @@ refreshes it when the ring looks full (producer) or empty (consumer), so in stea
 neither core touches the other's line. Capacity must be a power of two: indices are masked
 rather than divided, and it keeps the counters exact if `size_t` ever wraps.
 
+**Events are values, not pointers.** The queue used to carry `unique_ptr<Event>` through a
+polymorphic hierarchy, which meant a `new` on the matching thread and a `delete` on the
+logger thread — a cross-thread free, the slow path in every general allocator, paid on both
+cores. Events are now flat structs in a `std::variant` carried by value, so a slot write is
+a 40-byte memcpy and nothing allocates. Three things had to change together for that to
+hold, and a `static_assert` on `is_trivially_copyable_v<EventVariant>` guards all of them:
+the virtual `push_to_file` had to go (a vptr per slot, and a non-trivial variant), the
+`std::string reason` on the reject events became a borrowed `const char*`, and the log
+formatting moved to the logger (`event_handler/EventFormatter.h`) where `std::visit`
+dispatches it. The variant's active alternative is the type tag, so the old `event_type`
+member is gone; `event_type()` recovers it. `std::monostate` is not used as the shutdown
+sentinel — a `Shutdown` alternative is, so that every alternative has a `kType` and the
+sentinel is still just a default-constructed `T{}`.
+
+**Timestamps are taken on the matching thread, deliberately.** Each event stamps
+`system_clock::now()` at construction — a vDSO `clock_gettime`, tens of nanoseconds. Reading
+a raw cycle counter instead and converting on the logger thread would shave that off the hot
+path; it was tried and reverted, because it bought a calibration step, clock-drift caveats
+and a platform-specific header in exchange for a cost that is small next to the allocation
+that was actually removed. Ordering in the log comes from the queue — FIFO, single producer
+— not from comparing timestamps, so the stamp only has to say roughly when something
+happened.
+
 **The Python binding owns the wiring.** `MatchingEngine`'s constructor takes an event queue
 that nothing drains unless a `Logger` runs alongside it, and the engine must be destroyed
 *before* the logger is stopped or the final `SESSION_CLOSE` never reaches the file. Rather
@@ -179,9 +215,13 @@ Honest list, since some of these look like features from the outside:
 - **The event queue is bounded.** If the logger stalls on disk, the matching thread spins
   in `push()` rather than allocating. That is backpressure instead of unbounded memory
   growth, but it does mean file I/O can now stall the producer — which `LockQueue` never
-  did. 128 slots absorbs the burst from one sweeping order, not a long flush.
-- **Events are still heap-allocated.** `make_unique<Event>` per publish is ~44 ns and is
-  now about half the remaining publish cost (see above).
+  did. 128 slots absorbs the burst from one sweeping order, not a long flush. Slots hold a
+  40-byte `EventVariant` by value now rather than an 8-byte pointer, so the ring is 5 KiB
+  rather than 1 KiB — still L1-resident, but it is the whole event, not a pointer to it.
+- **Reject reasons are borrowed, not owned.** `OrderRejected::reason` is a `const char*`,
+  so every producer must pass a string literal or other static-storage text. Pointing it at
+  a local buffer is a dangling read on the logger thread. This is what keeps the event
+  types trivially copyable.
 - **No order book snapshot or recovery** — state lives in memory for the life of the process.
 - Risk checks are fat-finger limits only: max/min quantity and distance from top of book.
 
@@ -221,7 +261,5 @@ Requires CMake 3.20+, a C++20 compiler (tested on g++ 11.4), and Python 3.9+ for
 
 - A C++ feed handler replaying LOBSTER market data through the engine.
 - A Python alpha simulator on top of it.
-- Pre-allocated POD events constructed in place in the ring, removing the per-publish
-  `make_unique` that is now half the publish cost.
 - Moving the Python binding off `LockQueue`, which needs the SPSC contract argued for a
   facade whose engine can be driven from different OS threads across calls.

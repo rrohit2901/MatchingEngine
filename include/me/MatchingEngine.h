@@ -4,7 +4,7 @@
 #include "EventManager.h"
 #include "RiskManager.h"
 
-template<template<typename> class InputCont, typename T = std::unique_ptr<Event>>
+template<template<typename> class InputCont, typename T = EventVariant>
 requires validInputContConsumer<InputCont<T>, T>
 class MatchingEngine {
     private:

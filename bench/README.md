@@ -8,7 +8,10 @@ whenever the hot path changes.
 ```
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release -j
-./build-release/bench/bench_latency 300000
+
+# two cores, not one -- see the caveats below
+taskset -c 2,3 ./build-release/bench/bench_latency 300000
+
 ./build-release/bench/bench_add     --benchmark_min_time=0.5s
 ./build-release/bench/bench_cancel  --benchmark_min_time=0.5s
 ./build-release/bench/bench_modify  --benchmark_min_time=0.5s
@@ -16,19 +19,46 @@ cmake --build build-release -j
 
 | | |
 |---|---|
-| Date | 2026-08-19 |
-| Commit | `bb59657` plus the lock-free event queue change |
+| Date | 2026-09-11 |
+| Commit | `bd67f70` (allocation-free event queue) |
 | CPU | 12th Gen Intel Core i7-1250U (12 threads) |
 | Compiler | g++ 11.4.0 |
 | Build | Release — `-O3 -march=native -DNDEBUG` |
 | Samples | 300,000 per operation |
-| Timer overhead | ~27 ns per `steady_clock::now()` pair — subtract from every figure |
+| Timer overhead | ~28 ns per `steady_clock::now()` pair — subtract from every figure |
 
-CPU frequency scaling was **not** pinned, so absolute numbers move a few percent
-run to run. P50s were stable across three runs (±5%); tails were not. The figures
-below come from a single run (timer overhead 27 ns) so every row shares machine
-conditions; where a claim depends on the difference between two rows it was
-checked across four runs and that is called out.
+### Measurement caveats, learned the hard way
+
+**This CPU thermally throttles under sustained benchmarking, and stays throttled.**
+Running `bench_latency` back to back, the first two runs reported 19-29 ns timer
+overhead and `OrderBook add` P50 of 55-60 ns; runs three through six reported a
+dead-flat 36 ns overhead and 110 ns P50 — nearly 2x worse on identical code, and
+it did not recover. A 90-second cooldown between runs did not restore it either.
+Any comparison that runs build A then build B in a fixed order will therefore
+credit build B with the throttling, which is a large enough effect to invent or
+erase the entire result being measured.
+
+**Use the `OrderBook` rows as a control.** They are untouched by anything on the
+event path, so if they move between two runs, the machine moved, not the code.
+That check is what caught the problem: an earlier draft of this table showed
+`OrderBook add` P99 going 188 -> 565 ns on code that had not been edited at all.
+
+The figures below come from a **single run**, so every row shares machine
+conditions, and that run was chosen as the one whose `OrderBook` control rows sit
+closest to the pre-change baseline's (82/217/148 P50). Its P50 controls land
+within 4% (84/226/151), which is what makes the P50 comparison fair. Its P99
+controls are 1.2-1.7x *worse* than the baseline's, so P99 improvements shown here
+are understated rather than flattered.
+
+Two cores, not one: the engine rows run a producer thread and a draining consumer
+thread, so pinning to a single core makes `RingBuffer::push` spin against a
+consumer that cannot be scheduled, and P99.9 blows up to a scheduler quantum
+(~40 ms). That is a measurement artifact, not a queue property.
+
+**P99.9 is not trustworthy on this machine.** The `max` column runs to several
+milliseconds under WSL2, so the top 0.1% is measuring scheduler preemption rather
+than the code. It is kept in the tables below for completeness and is deliberately
+absent from the top-level README. Read P50, and P99 with care.
 
 `me_core` gained `POSITION_INDEPENDENT_CODE` when the Python bindings landed, since
 a static library cannot otherwise link into a shared module. A/B'd against a
@@ -42,15 +72,15 @@ All values in nanoseconds.
 
 | operation | P50 | P99 | P99.9 | mean |
 |---|---:|---:|---:|---:|
-| OrderBook add | 82 | 188 | 1,382 | 118 |
-| OrderBook modify | 217 | 289 | 574 | 241 |
-| OrderBook cancel | 148 | 251 | 459 | 189 |
-| Engine add `[LockQueue]` | 699 | 5,987 | 65,548 | 1,472 |
-| Engine add `[RingBuf/128]` | 768 | 2,372 | 52,823 | 1,110 |
-| Engine modify `[LockQueue]` | 1,755 | 22,523 | 100,405 | 2,811 |
-| Engine modify `[RingBuf/128]` | 827 | 2,359 | 22,365 | 1,122 |
-| Engine cancel `[LockQueue]` | 750 | 5,893 | 98,294 | 1,554 |
-| Engine cancel `[RingBuf/128]` | 452 | 1,482 | 10,276 | 642 |
+| OrderBook add | 84 | 220 | 1,690 | 134 |
+| OrderBook modify | 226 | 485 | 786 | 268 |
+| OrderBook cancel | 151 | 333 | 587 | 230 |
+| Engine add `[LockQueue]` | 670 | 4,361 | 55,646 | 1,232 |
+| Engine add `[RingBuf/128]` | 383 | 843 | 20,548 | 713 |
+| Engine modify `[LockQueue]` | 1,199 | 8,006 | 54,975 | 1,926 |
+| Engine modify `[RingBuf/128]` | 557 | 1,023 | 21,355 | 732 |
+| Engine cancel `[LockQueue]` | 452 | 3,079 | 27,825 | 672 |
+| Engine cancel `[RingBuf/128]` | 283 | 525 | 1,204 | 353 |
 
 `OrderBook` rows measure the book in isolation. `Engine` rows are the same
 operation through `MatchingEngine`, which adds risk checks, event publishing and
@@ -63,39 +93,40 @@ the producer-side cost on the hot path.
 change is measured against. `bench_latency` builds both, so the comparison is one
 run rather than two builds.
 
-**Read the tails, not the P50.** P99 and P99.9 improve on every operation, which
-is the mutex contention going away. At P50 only `modify` and `cancel` improve
-consistently; across four runs `Engine add` P50 landed on both sides of the
-`LockQueue` figure (430/764/699/750 vs 354/749/768/701), so treat add's P50 as
-unchanged.
+`RingBuf/128` now beats `LockQueue` at P50 on every operation, which it did not
+before events became values: with `unique_ptr<Event>` the allocation dominated the
+publish, so the choice of queue barely showed at the median and `Engine add` P50
+landed on both sides of the `LockQueue` figure across runs. Removing the
+allocation made the queue the visible cost, and the lock-free one wins.
 
 ## Where the Engine overhead goes
 
-Measured with the same payload as the engine publishes
-(`make_unique<TradeEvent>` + one push, consumer draining), 500k samples, median
-of three runs:
+Measured with the same payload the engine publishes — construct one `TradeEvent`
+and push it into the ring with a consumer draining — 400k samples, median of five
+runs of each binary, interleaved so both see the same machine conditions:
 
-| component | P50 | P99 | P99.9 |
+| publish one event | P50 | P99 | P99.9 |
 |---|---:|---:|---:|
-| `LockQueue::push` (one event), consumer draining | 217 ns | 2,557 ns | 10,956 ns |
-| `RingBuffer<128>::push` (one event), consumer draining | 96 ns | 755 ns | 864 ns |
-| — of which `make_unique<TradeEvent>` alone | 44 ns | 69 ns | — |
-| `RiskManager::runAllChecks` | 28 ns | | |
+| `make_unique<TradeEvent>` + `RingBuffer<128>::push` | 111 ns | 742 ns | 2,892 ns |
+| construct in `EventVariant` + `RingBuffer<128>::push` | 77 ns | 124 ns | 641 ns |
 
-- **Publishing is no longer the dominant cost.** 217 ns -> 96 ns at P50, and
-  10,956 ns -> 864 ns at P99.9. `LockQueue::push` did two heap allocations
-  (`make_unique<Event>`, then `make_shared` inside `push`) and took a mutex that
-  `wait_and_pop` re-acquires on every predicate re-check, so producer and
-  consumer contended for the same lock — that was the source of the tens-of-µs
-  tails. The ring buffer does one release store and no allocation of its own.
-- **What is left is the allocation.** 44 of the remaining 96 ns is
-  `make_unique<TradeEvent>`. Pre-allocated POD events constructed in place in the
-  ring would remove it; that is the next piece of work on this path.
-- **Risk checks are effectively free.** 28 ns is within timer noise.
+- **The allocation is gone.** The queue used to carry `unique_ptr<Event>`, so every
+  publish was a `new` on the matching thread and a `delete` on the logger thread.
+  A cross-thread free is the slow path in every general-purpose allocator — it
+  either takes the arena lock or pushes onto a remote free list — so both cores
+  paid. Events are now flat structs in a trivially copyable `std::variant`
+  (40 bytes), so the slot write is a memcpy and nothing allocates.
+- **The tail moved more than the median.** P99 fell 742 -> 124 ns and P99.9
+  2,892 -> 641 ns, against 111 -> 77 ns at P50. That ratio is the signature of an
+  allocator leaving the path: the median cost of `malloc` on a hot free list is
+  modest, but its tail — a refill, a slow-path arena lock — is not.
 - **Matching costs a second book mutation.** `tryMatch` runs `getOrderView` +
   `fillOrders` + `modifyOrder` even when nothing crosses, so
-  Engine add ~= book add (82) + event (96) + a modify-shaped operation (~280),
-  and matching is now the largest single component.
+  Engine add ~= book add (84) + publish (77) + a modify-shaped operation, and
+  matching is now comfortably the largest single component.
+
+Not re-measured for this change: `RiskManager::runAllChecks` was previously timed
+at 28 ns, which was inside timer noise then and has not been touched since.
 
 ## Ring buffer capacity: a negative result
 
@@ -106,11 +137,14 @@ and a control run with a **2-slot** ring matched 65,536:
 
 | Engine add | P50 | P99 | P99.9 | mean |
 |---|---:|---:|---:|---:|
-| `RingBuf/2` | 771 | 1,623 | 30,290 | 966 |
-| `RingBuf/128` | 770 | 2,124 | 25,193 | 1,019 |
-| `RingBuf/1K` | 771 | 2,111 | 19,319 | 1,005 |
-| `RingBuf/8K` | 812 | 2,388 | 39,909 | 1,121 |
-| `RingBuf/64K` | 732 | 2,110 | 18,436 | 976 |
+| `RingBuf/128` | 383 | 843 | 20,548 | 713 |
+| `RingBuf/1K` | 375 | 808 | 3,955 | 522 |
+| `RingBuf/8K` | 373 | 795 | 13,481 | 490 |
+| `RingBuf/64K` | 394 | 864 | 18,819 | 604 |
+
+(Same single run as the table above. The `RingBuf/2` control row was from the
+earlier `unique_ptr` build and is not re-measured here; the conclusion is
+unchanged — the P50 spread across a 512x range of capacities is under 6%.)
 
 That is not surprising once you look at the drain thread: it discards events and
 does no I/O, so it never falls behind, the ring sits near-empty, and `push()`
@@ -126,7 +160,9 @@ measured against a stall.
 
 ## Google Benchmark suites
 
-Mean ns/op.
+Mean ns/op. **Not re-measured for the event-queue change** — these cover
+`OrderBook` only, which that change does not touch, so they carry the date of the
+previous run rather than the one in the header above.
 
 | benchmark | ns |
 |---|---:|

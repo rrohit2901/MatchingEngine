@@ -10,7 +10,7 @@
 
 namespace {
 
-using EventQueue = EventRingBuffer<std::unique_ptr<Event>>;
+using EventQueue = EventRingBuffer<EventVariant>;
 
 constexpr const char* kLogFile = "logs/matching_engine.log";
 

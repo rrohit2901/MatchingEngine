@@ -4,7 +4,6 @@
 #include <gtest/gtest.h>
 
 #include <memory>
-#include <typeinfo>
 #include <vector>
 
 // MatchingEngine is OrderBook plus automatic matching: every addOrder and
@@ -19,7 +18,7 @@
 namespace {
 
 using Levels = std::vector<std::shared_ptr<BookLevel>>;
-using EventQueue = LockQueue<std::unique_ptr<Event>>;
+using EventQueue = LockQueue<EventVariant>;
 
 int restingQuantity(const Levels& levels) {
     int total = 0;
@@ -44,18 +43,20 @@ class MatchingEngineTest : public ::testing::Test {
 
     // Pops everything published so far. The engine emits SESSION_OPEN from its
     // constructor, so that is always the first entry.
-    std::vector<std::unique_ptr<Event>> drainEvents() {
-        std::vector<std::unique_ptr<Event>> events;
+    std::vector<EventVariant> drainEvents() {
+        std::vector<EventVariant> events;
         while (auto popped = queue->try_pop()) {
             events.push_back(std::move(*popped));
         }
         return events;
     }
 
+    // event_type() reads the variant's active alternative; it replaced the
+    // event_type member the old polymorphic base carried.
     std::vector<EventTypes> drainEventTypes() {
         std::vector<EventTypes> types;
         for (const auto& event : drainEvents()) {
-            types.push_back(event->event_type);
+            types.push_back(event_type(event));
         }
         return types;
     }
@@ -63,7 +64,7 @@ class MatchingEngineTest : public ::testing::Test {
     std::vector<TradeEvent> drainTrades() {
         std::vector<TradeEvent> trades;
         for (const auto& event : drainEvents()) {
-            if (auto* trade = dynamic_cast<TradeEvent*>(event.get())) {
+            if (const auto* trade = std::get_if<TradeEvent>(&event)) {
                 trades.push_back(*trade);
             }
         }
@@ -257,7 +258,7 @@ TEST_F(MatchingEngineTest, DestructionPublishesSessionClose) {
         auto scoped_queue = std::make_shared<EventQueue>();
         { MatchingEngine<LockQueue> scoped{scoped_queue}; }  // open, then close
         while (auto popped = scoped_queue->try_pop()) {
-            types.push_back((*popped)->event_type);
+            types.push_back(event_type(*popped));
         }
     }
     ASSERT_EQ(types.size(), 2u);
@@ -424,13 +425,13 @@ TEST_F(MatchingEngineTest, RejectEventCarriesRequestAndReason) {
 
     const auto events = drainEvents();
     ASSERT_EQ(events.size(), 2u);
-    auto* reject = dynamic_cast<OrderRejected*>(events[1].get());
+    const auto* reject = std::get_if<OrderRejected>(&events[1]);
     ASSERT_NE(reject, nullptr);
     EXPECT_EQ(reject->price, 100);
     EXPECT_EQ(reject->qty, 0);
     EXPECT_EQ(reject->side, OrderSide::BUY);
     EXPECT_EQ(reject->type, OrderType::LIMIT);
-    EXPECT_EQ(reject->reason, "QUANTITY_BELOW_MIN");
+    EXPECT_STREQ(reject->reason, "QUANTITY_BELOW_MIN");
 }
 
 TEST_F(MatchingEngineTest, RejectReasonDistinguishesQuantityFromPrice) {
@@ -438,18 +439,18 @@ TEST_F(MatchingEngineTest, RejectReasonDistinguishesQuantityFromPrice) {
     {
         const auto events = drainEvents();
         ASSERT_EQ(events.size(), 2u);
-        auto* reject = dynamic_cast<OrderRejected*>(events[1].get());
+        const auto* reject = std::get_if<OrderRejected>(&events[1]);
         ASSERT_NE(reject, nullptr);
-        EXPECT_EQ(reject->reason, "QUANTITY_ABOVE_MAX");
+        EXPECT_STREQ(reject->reason, "QUANTITY_ABOVE_MAX");
     }
 
     ASSERT_TRUE(me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
     ASSERT_FALSE(me.addOrder(9100, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
     {
         const auto events = drainEvents();
-        auto* reject = dynamic_cast<OrderRejected*>(events.back().get());
+        const auto* reject = std::get_if<OrderRejected>(&events.back());
         ASSERT_NE(reject, nullptr);
-        EXPECT_EQ(reject->reason, "PRICE_TOO_FAR_FROM_TOP");
+        EXPECT_STREQ(reject->reason, "PRICE_TOO_FAR_FROM_TOP");
     }
 }
 
@@ -457,7 +458,7 @@ TEST_F(MatchingEngineTest, MarketOrderRejectRecordsItsType) {
     ASSERT_FALSE(me.addOrder(100, 0, OrderType::MARKET, OrderSide::SELL).has_value());
 
     const auto events = drainEvents();
-    auto* reject = dynamic_cast<OrderRejected*>(events.back().get());
+    const auto* reject = std::get_if<OrderRejected>(&events.back());
     ASSERT_NE(reject, nullptr);
     EXPECT_EQ(reject->type, OrderType::MARKET);
     EXPECT_EQ(reject->side, OrderSide::SELL);
@@ -468,30 +469,30 @@ TEST_F(MatchingEngineTest, ModifyRejectCarriesTargetOrderAndReason) {
     ASSERT_FALSE(me.modifyOrder(id, 0, 100, OrderSide::BUY, OrderType::LIMIT).has_value());
 
     const auto events = drainEvents();
-    auto* reject = dynamic_cast<OrderModifyRejected*>(events.back().get());
+    const auto* reject = std::get_if<OrderModifyRejected>(&events.back());
     ASSERT_NE(reject, nullptr);
     // The targeted order is still resting under this id, untouched.
     EXPECT_EQ(reject->order_id, id);
     EXPECT_EQ(reject->new_qty, 0);
     EXPECT_EQ(reject->new_price, 100);
-    EXPECT_EQ(reject->reason, "QUANTITY_BELOW_MIN");
+    EXPECT_STREQ(reject->reason, "QUANTITY_BELOW_MIN");
 }
 
 TEST_F(MatchingEngineTest, ModifyRejectForUnknownOrderSaysNotFound) {
     ASSERT_FALSE(me.modifyOrder(9999, 10, 100, OrderSide::BUY, OrderType::LIMIT).has_value());
 
     const auto events = drainEvents();
-    auto* reject = dynamic_cast<OrderModifyRejected*>(events.back().get());
+    const auto* reject = std::get_if<OrderModifyRejected>(&events.back());
     ASSERT_NE(reject, nullptr);
     EXPECT_EQ(reject->order_id, 9999u);
-    EXPECT_EQ(reject->reason, "ORDER_NOT_FOUND");
+    EXPECT_STREQ(reject->reason, "ORDER_NOT_FOUND");
 }
 
 TEST_F(MatchingEngineTest, AcceptedOrderPublishesNoReject) {
     ASSERT_TRUE(me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY).has_value());
 
     for (const auto& event : drainEvents()) {
-        EXPECT_NE(event->event_type, EventTypes::ORDER_REJECTED);
-        EXPECT_NE(event->event_type, EventTypes::ORDER_MODIFY_REJECTED);
+        EXPECT_NE(event_type(event), EventTypes::ORDER_REJECTED);
+        EXPECT_NE(event_type(event), EventTypes::ORDER_MODIFY_REJECTED);
     }
 }
