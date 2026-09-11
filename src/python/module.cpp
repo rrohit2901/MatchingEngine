@@ -39,7 +39,7 @@ namespace py = pybind11;
 
 namespace {
 
-using EventQueue  = LockQueue<std::unique_ptr<Event>>;
+using EventQueue  = LockQueue<EventVariant>;
 using Engine      = MatchingEngine<LockQueue>;
 using EventLogger = Logger<LockQueue>;
 

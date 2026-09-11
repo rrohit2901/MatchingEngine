@@ -20,7 +20,7 @@
 
 namespace {
 
-using EventQueue = LockQueue<std::unique_ptr<Event>>;
+using EventQueue = LockQueue<EventVariant>;
 
 ::testing::AssertionResult IsGone(OrderBook& book, order_id_t order_id) {
     if (!book.IsOrderValid(order_id)) {
@@ -39,11 +39,13 @@ class MatcherTest : public ::testing::Test {
         std::make_shared<EventManager<LockQueue>>(queue)};
     Matcher<LockQueue> matcher{order_book, event_manager};
 
-    // Every trade the matcher published, popped back off the queue.
+    // Every trade the matcher published, popped back off the queue. Events are
+    // values in a variant now, so picking the trades out is get_if rather than
+    // the dynamic_cast the old polymorphic hierarchy needed.
     std::vector<TradeEvent> drainTrades() {
         std::vector<TradeEvent> trades;
         while (auto popped = queue->try_pop()) {
-            if (auto* trade = dynamic_cast<TradeEvent*>(popped->get())) {
+            if (const auto* trade = std::get_if<TradeEvent>(&*popped)) {
                 trades.push_back(*trade);
             }
         }

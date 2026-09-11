@@ -1,19 +1,21 @@
 #pragma once
 
 #include <cstddef>
-#include <memory>
 
 #include "Events.h"
 #include "lock_free_ring_buffer.h"
 
 // The queue that carries events from the matching thread to the logger thread.
 //
-// This is the one place the capacity is chosen. 128 slots of
-// std::unique_ptr<Event> is 1 KiB -- sixteen cache lines, so the whole ring
-// stays resident in L1 while the logger is keeping up. It only has to absorb
-// the burst a single matching operation can emit (a marketable order publishes
-// one event per fill it sweeps), not the whole session; the logger drains
-// continuously behind it.
+// This is the one place the capacity is chosen. Slots hold an EventVariant by
+// value (40 bytes) rather than the unique_ptr<Event> they used to, so 128 slots
+// is 5 KiB instead of 1 KiB -- still comfortably inside a 32 KiB L1d, and now the
+// ring really is the whole event, not 128 pointers to scattered heap blocks.
+//
+// The capacity stayed at 128 through that change on purpose: it is sized by the
+// burst a single matching operation can emit (a marketable order publishes one
+// event per fill it sweeps), and shrinking it to keep the old byte count would
+// have narrowed that headroom for no benefit.
 //
 // The trade-off versus LockQueue: this queue is *bounded*. When the logger
 // falls behind -- a slow disk, a large flush -- the matching thread spins in
@@ -29,5 +31,5 @@ inline constexpr size_t kEventQueueCapacity = 128;
 template<typename T>
 using EventRingBuffer = RingBuffer<T, kEventQueueCapacity>;
 
-static_assert(sizeof(EventRingBuffer<std::unique_ptr<Event>>) <= 4096,
+static_assert(sizeof(EventRingBuffer<EventVariant>) <= 8192,
               "event queue should stay small enough to be cache resident");

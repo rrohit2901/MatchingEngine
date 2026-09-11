@@ -147,7 +147,7 @@ target_include_directories(me_ds_lock INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/incl
 # -----------------------------------------------------------------------------
 # Lock-free data structures — header-only (SPSC ring buffer).
 # This no longer needs a compile-check TU to force instantiation: EventQueue.h
-# instantiates RingBuffer<unique_ptr<Event>, 128> for the logger pipeline, so
+# instantiates RingBuffer<EventVariant, 128> for the logger pipeline, so
 # anything building me_main / bench_latency type-checks the header for real.
 # -----------------------------------------------------------------------------
 add_library(me_ds_lockfree INTERFACE)
