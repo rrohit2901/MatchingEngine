@@ -5,6 +5,7 @@ symbol through the engine's order book, lets a Python strategy trade into it
 with configurable latency, and reports what happened.
 
 - **How the replay was built and validated:** [`strategy-replay-plan.md`](strategy-replay-plan.md).
+- **Every design decision:** [`decisions.md`](decisions.md).
 - **The simulator's exact rules:** `include/replay/Simulator.h`.
 
 ---
@@ -154,10 +155,12 @@ strategy's own orders trade with each other:
 
 Set `[model] self_trade_prevention = true` to reject such orders instead.
 
-**What the replay cannot know:**
+**What the replay cannot know or doesn't model:**
 - how other traders would have reacted to the strategy's orders
 - hidden liquidity
 - other venues: this is Nasdaq's book only
+- trading halts: they aren't handled. The default window (09:31–15:59) keeps clear of
+  the opening and closing auctions.
 
 A strategy that quotes better than the market is filled only when real flow
 arrives at its price.
@@ -188,6 +191,8 @@ For programs (the web UI uses these):
   `strategy_runtime`, and its traceback shows only the strategy's own lines.
 - `--progress FILE` keeps a small JSON file updated with how far through the trading
   window the replay is.
+- `--progress -` prints `ME-PROGRESS <fraction>` lines on stderr instead. The web UI
+  uses this, because a sandboxed run's files can't be read until it ends.
 - `--quiet` drops the printed report.
 
 ## Web UI
@@ -197,15 +202,27 @@ pip install '.[web]'
 streamlit run webapp/app.py          # http://localhost:8501
 ```
 
+Live at **https://52-65-150-242.sslip.io**.
+
 - **Sidebar:** every setting above.
-- **Main area:** the strategy's code (or upload a `.py` file) and its parameters, as
-  TOML.
-- **Run:** executes in a separate process with limits: 120 s wall time, 90 s CPU,
-  1.5 GB memory, 20 MB of output. At most 2 runs execute at once, and the rest queue.
-  Results appear on the page: metrics, equity, position and mid charts, fills by
-  source, rejects, reconciliation counters, and fills and orders with CSV download.
-- **Locally:** the runner is not a sandbox. The public deployment adds one; see
-  [`ui-plan.md`](ui-plan.md).
+- **Main area:**
+  - the strategy's code (or upload a `.py` file)
+  - its parameters, as TOML
+  - an optional **run label**, which heads the results and names the downloads.
+    Without one, the heading is your Strategy class's name.
+- **Run:** executes in a separate process with limits:
+  - 120 s wall time, 90 s CPU, 20 MB of output, 100 KB of code
+  - memory: 1.5 GB locally, 1 GB on the server
+  - runs at once: 2 locally, 1 on the server; the rest queue
+  - per visitor IP: one run at a time, 30 s apart, 20 an hour
+- **Results** appear on the page:
+  - metrics
+  - equity, position and mid charts
+  - fills by source and rejects
+  - reconciliation counters
+  - fills and orders as CSV downloads
+- **Locally, the runner is not a sandbox.** On the server every run is in an isolate box
+  with no network; see [`deploy.md`](deploy.md).
 
 ## Getting data
 

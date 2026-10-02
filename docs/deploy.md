@@ -2,7 +2,8 @@
 
 How the public site runs, how to build it from nothing, how to operate it, and how
 to take it down.
-- **Why it's built this way:** [`ui-plan.md`](ui-plan.md).
+- **Why it's built this way:** [`ui-plan.md`](ui-plan.md), and every decision in
+  [`decisions.md`](decisions.md).
 - **Using the backtester:** [`backtesting.md`](backtesting.md).
 
 ```
@@ -189,6 +190,12 @@ readlink -f /opt/me/current; ls /opt/me/releases
   away; no restart is needed.
 - **See the site without the public address:**
   `ssh -i $KEY -N -L 8502:127.0.0.1:8501 ubuntu@$IP`, then open http://localhost:8502.
+
+- **If the public IP ever changes** (a new Elastic IP, or a rebuilt server):
+  1. Re-run `provision.sh` with the new `SITE_ADDRESS=<new-ip-with-dashes>.sslip.io`.
+  2. In the GitHub `production` environment, update `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS`
+     (`ssh-keyscan` again; a new server has a new host key) and `SITE_URL`.
+  3. Update the live link in `README.md` and `docs/backtesting.md`.
 
 ## 7. Things that went wrong once (and how they were fixed)
 

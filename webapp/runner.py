@@ -8,17 +8,21 @@ whatever happened into a RunResult the page can show.
     runner = Runner(data_dir=Path("data/databento"))
     result = runner.run(settings, code, params, on_status=print)
 
-Two things are deliberately separate:
+Three things are deliberately separate:
 
-* Queueing: at most `max_concurrent` runs execute at once (2 by default, one
-  per core); up to `max_queue` more wait in arrival order and are told their
-  place in line. Every visitor's Streamlit session is a thread in one process,
-  so one Runner shared by all of them is the whole queue.
+* Rate limits (optional): per client, i.e. per visitor IP on the public site.
+  At most one run running or queued, a cooldown, and a cap per rolling hour
+  (RateLimiter).
+* Queueing: at most `max_concurrent` runs execute at once (2 by default; the
+  t4g.small server uses 1); up to `max_queue` more wait in arrival order and are
+  told their place in line. Every visitor's Streamlit session is a thread in one
+  process, so one Runner shared by all of them is the whole queue.
 * Execution: a backend starts the process and enforces the limits.
-  LocalBackend (here) uses an empty environment, rlimits and a watchdog. It is
-  NOT a sandbox: the code can still read files and use the network. It is for
-  running the UI on your own machine. Production (docs/ui-plan.md, U4) adds an
-  isolate backend with namespaces and cgroups.
+  - LocalBackend uses an empty environment, rlimits and a watchdog. It is NOT a
+    sandbox: the code can still read files and use the network. It is for
+    running the UI on your own machine.
+  - IsolateBackend (production) runs each backtest in an isolate box: its own
+    namespaces (no network), its own UID, cgroup limits. See docs/deploy.md.
 """
 
 from __future__ import annotations

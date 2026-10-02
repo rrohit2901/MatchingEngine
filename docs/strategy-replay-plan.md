@@ -1,5 +1,12 @@
 # Plan: Databento data + strategy replay (backtest) CLI
 
+> **Status: Phases 0–4 built.** The web UI and the deployment followed, in
+> [`ui-plan.md`](ui-plan.md).
+> - This file keeps the plan as written, with each phase's results below it. Where the
+>   build differs, the "Departures" notes say so.
+> - **Every decision** (who made it, what superseded what): [`decisions.md`](decisions.md).
+> - **Using the backtester:** [`backtesting.md`](backtesting.md).
+
 ## Context
 The engine currently matches synthetic orders, and a single 2012 AAPL LOBSTER sample is
 the only real data. The goal is a **strategy replay mechanism**:
@@ -21,8 +28,20 @@ email delivery and deployment come later.
 - **One symbol per backtest run.** This keeps the original single-symbol design: one
   `OrderBook` per run.
 - **Fill model:** strategy orders are filled by real executions that reach their queue
-  position. Aggressive strategy orders take real liquidity. Passive fills leave the venue's
-  orders as recorded by default. This was revised in Phase 2; see the Phases 2–4 results.
+  position, and aggressive strategy orders take real liquidity.
+  - Implemented per fill, rather than as one synthetic aggressor per execution.
+  - **Passive impact is on by default** (`passive_impact = true`): a passive fill comes out
+    of the venue order queued behind the strategy.
+  - Details in the Phases 2–4 results.
+- **Self-trades execute by default**, as on Nasdaq. Prevention is opt-in
+  (`self_trade_prevention`).
+- **Limit orders only.**
+- **Risk limits:**
+  - position, in shares
+  - capital, in USD per side: shares held at the current mid plus open orders at their
+    limit prices, checked when an order is sent
+  - order size
+  - price distance from the same side's best
 - **Strategy callback: fixed timer every 10-20 ms of simulated time** (configurable,
   default 10 ms). No event-driven callbacks in the first version.
 
@@ -115,6 +134,11 @@ checked against the downloaded data in Phase 0.
    - The strategy only runs from 09:30 to 16:00.
    - It is paused around the opening and closing auctions (configurable buffer).
    - Halts pause the strategy.
+   - *As built:*
+     - the trading window defaults to 09:31–15:59, which keeps clear of both auctions, and
+       is configurable
+     - **trading halts are not handled**
+     - the replay stops at the window's end
 9. **Quiet logging.** Log only strategy orders and fills, not millions of market events.
 10. **Results:**
     - PnL: realized, plus open positions marked at mid-price.
@@ -279,8 +303,8 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
   - `run`: TOML config plus flag overrides, `--param`, and CSV outputs.
   - `validate` (`--through-simulator`).
 - **Example:** `strategies/ob_alpha.py` and `.toml`.
-- **Tests:** 19 gtest cases (`tests/test_simulator.cpp`) and 6 pytest cases
-  (`tests/python/test_backtest.py`).
+- **Tests:** 19 gtest cases (`tests/test_simulator.cpp`) and the pytest cases in
+  `tests/python/test_backtest.py`.
 
 **Departures from the plan above, and why**
 - **No owner tag or timestamps in `Order` / `OrderManager`.**
@@ -340,11 +364,10 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
 - **Latency changes the outcome.** On TSLA: 52,445 fills at 0 µs, 52,481 at 1 ms and
   52,387 at 10 ms.
 
-### Later (out of scope)
-- Streamlit UI.
-- Sandboxing user code.
-- Emailing results.
-- Deployment.
+### Later (since done, except email)
+- **Streamlit UI, the sandbox for user code, and deployment:** built; see
+  [`ui-plan.md`](ui-plan.md) and [`deploy.md`](deploy.md).
+- **Emailing results:** dropped. Results are shown on the page.
 
 ## Critical files
 - **New:**
@@ -355,10 +378,14 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
   - A CLI console script in `pyproject.toml`
   - `strategies/ob_alpha.py`
 - **Modified:**
-  - `include/me/Order.h` and `OrderManager`: owner tag and timestamps
-  - `include/me/OrderBook.h`: a path for market events that skips risk and matching
-  - `src/python/module.cpp`: bindings
-  - `CMakeLists.txt`: new targets
+  - `include/me/OrderBook.h`, `OrderBookSide.h`, `BookLevel.h`: read access only.
+    `getTopLevel` (allocation-free best level) and `getLevelQueue` (a level's FIFO queue).
+    - The planned owner tag in `Order`/`OrderManager` was not needed; the simulator
+      tracks strategy orders itself.
+    - Venue records use the existing `OrderBook::addOrder`, which neither matches nor
+      risk-checks.
+  - `src/python/module.cpp` and `src/python/replay_bindings.cpp`: bindings
+  - `CMakeLists.txt`: the `me_replay` target
   - `README.md`
 
 ## Verification
