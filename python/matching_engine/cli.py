@@ -344,9 +344,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         return fail("strategy_load", exc.__cause__ or exc)
     except (SystemExit, Exception) as exc:   # bad TOML, missing keys, bad values
         return fail("config", exc)
+    # SystemExit too: a strategy calling sys.exit() is the strategy's doing, not a crash.
     try:
         strategy = strategy_cls(**params)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         return fail("strategy_init", exc)
 
     on_progress = None
@@ -364,7 +365,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                                                "elapsed_s": round(time.monotonic() - started, 2)})
     try:
         result = run_backtest(strategy, config, on_progress=on_progress)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         return fail("strategy_runtime", exc)
 
     if not args.quiet:

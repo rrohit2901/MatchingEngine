@@ -57,8 +57,13 @@ systemctl enable --now isolate.service
 log "App user and directories"
 # me-web runs the UI and starts the isolate boxes; no shell, no SSH.
 id me-web >/dev/null 2>&1 || useradd --system --home-dir /var/lib/me-web --shell /usr/sbin/nologin me-web
-install -d -o root -g root -m 755 /opt/me /srv/me
-install -d -o root -g me-web -m 750 /srv/me/data   # Parquet files: readable by the app, never writable
+install -d -o root -g root -m 755 /opt/me
+# /srv/me is closed to other local users; inside it, the data is world-readable so
+# that isolate boxes (which run under their own UIDs, with the data bind-mounted
+# read-only at /data) can read it. Nothing under it is writable except by root.
+install -d -o root -g me-web -m 750 /srv/me
+install -d -o root -g root -m 755 /srv/me/data
+find /srv/me/data -type d -exec chmod 755 {} + -o -type f -exec chmod 644 {} +
 if [ -f "$(dirname "$0")/systemd/me-web.service" ]; then
     install -m 644 "$(dirname "$0")/systemd/me-web.service" /etc/systemd/system/me-web.service
     systemctl daemon-reload
