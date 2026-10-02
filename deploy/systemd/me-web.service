@@ -1,0 +1,28 @@
+# The backtester web UI (webapp/app.py). Installed by deploy/provision.sh.
+[Unit]
+Description=Backtester web UI (Streamlit)
+After=network-online.target isolate.service
+Wants=network-online.target isolate.service
+
+[Service]
+User=me-web
+Group=me-web
+StateDirectory=me-web
+Environment=HOME=/var/lib/me-web
+Environment=ME_DATA_DIR=/srv/me/data
+# Sizing for a t4g.small (2 vCPU / 2 GB): one run at a time, ~600 MB each.
+Environment=ME_BACKEND=isolate
+Environment=ME_MAX_CONCURRENT=1
+Environment=ME_MAX_QUEUE=10
+Environment=ME_MEMORY_MB=1024
+ExecStart=/opt/me/current/venv/bin/streamlit run /opt/me/current/src/webapp/app.py \
+    --server.address=127.0.0.1 --server.port=8501 --server.headless=true \
+    --browser.gatherUsageStats=false --server.maxUploadSize=1
+Restart=always
+RestartSec=3
+# The app itself (not the runs: isolate moves each run into its own cgroup).
+MemoryMax=600M
+# No NoNewPrivileges/ProtectSystem: isolate is setuid root and must create boxes.
+
+[Install]
+WantedBy=multi-user.target
