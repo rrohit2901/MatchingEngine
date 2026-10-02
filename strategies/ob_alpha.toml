@@ -29,7 +29,8 @@ maker = 0.0                      # dollars per share; negative = rebate (e.g. -0
 taker = 0.0                      # (e.g. 0.0030)
 
 [model]
-passive_impact = false           # true: passive fills take quantity away from venue orders (see Simulator.h)
+passive_impact = true            # passive fills come out of the venue order behind (see Simulator.h)
+self_trade_prevention = false    # Nasdaq's default: the strategy's own orders can trade with each other
 
 [strategy]
 path = "strategies/ob_alpha.py"
