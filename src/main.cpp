@@ -15,18 +15,13 @@ using EventQueue = EventRingBuffer<EventVariant>;
 constexpr const char* kLogFile = "logs/matching_engine.log";
 
 // Prices are plain integers (ticks) — there is no floating point in the engine.
-// BookLevel hands back order ids rather than Order objects, so a level can only
-// print ids; per-order detail would need MatchingEngine to forward OrderBook's
-// getOrder*() accessors.
-void printSide(const char* label, const std::vector<std::shared_ptr<BookLevel>>& levels) {
+// Views are per-level price/quantity snapshots; per-order detail would need
+// MatchingEngine to forward OrderBook's getOrder*() accessors.
+void printSide(const char* label, const std::vector<LevelView>& levels) {
     std::cout << label << ":\n";
     for (const auto& level : levels) {
-        std::cout << "  price " << level->getPrice()
-                  << ", quantity " << level->getTotalQuantity() << '\n';
-        // getOrders() already filters out cancelled/filled ids, so no valid() check here.
-        for (order_id_t order_id : level->getOrders()) {
-            std::cout << "    order " << order_id << '\n';
-        }
+        std::cout << "  price " << level.price
+                  << ", quantity " << level.quantity << '\n';
     }
 }
 

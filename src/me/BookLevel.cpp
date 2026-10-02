@@ -1,11 +1,10 @@
 #include "BookLevel.h"
 #include "Order.h"
-#include <ranges>
 
-BookLevel::BookLevel() : total_quantity(0), price(0) {
+BookLevel::BookLevel() : total_quantity(0), price(0), live_orders(0), head(0) {
     orders.reserve(512);
 }
-BookLevel::BookLevel(std::shared_ptr<OrderManager>& order_manager, int price) : total_quantity(0), price(price), order_manager(order_manager) {
+BookLevel::BookLevel(std::shared_ptr<OrderManager>& order_manager, int price) : total_quantity(0), price(price), live_orders(0), head(0), order_manager(order_manager) {
     orders.reserve(512);
 }
 
@@ -21,24 +20,39 @@ int BookLevel::getTotalQuantity() const {
 
 std::vector<order_id_t> BookLevel::getOrders() const {
     std::vector<order_id_t> validOrders;
-    for(order_id_t order_id: orders) {
-        if(order_manager->valid(order_id)) validOrders.push_back(order_id);
-    } 
+    for(size_t i = head; i < orders.size(); ++i) {
+        if(order_manager->valid(orders[i])) validOrders.push_back(orders[i]);
+    }
     return validOrders;
 }
 
 std::vector<order_id_t> BookLevel::getAllOrders() const {
-    return orders;
+    return {orders.begin() + static_cast<std::ptrdiff_t>(head), orders.end()};
 }
 
 int BookLevel::getPrice() const {
     return price;
 }
 
+LevelView BookLevel::getView() const {
+    return {price, total_quantity};
+}
+
+void BookLevel::reset(int new_price) {
+    price = new_price;
+    total_quantity = 0;
+    live_orders = 0;
+    head = 0;
+    orders.clear();
+}
+
 order_id_t BookLevel::addOrder(OrderSide side, OrderType type, int price, int quantity) {
     order_id_t order_id = order_manager->add_order(side, type, quantity, price);
     total_quantity += quantity;
+    // Reclaim dead slots instead of letting push_back reallocate.
+    if(orders.size()==orders.capacity() && live_orders < orders.size()) compact();
     orders.push_back(order_id);
+    live_orders += 1;
     return order_id;
 }
 
@@ -53,6 +67,8 @@ std::optional<order_id_t> BookLevel::modifyOrder(order_id_t order_id, int new_qu
     if(new_quantity <= current_quantity) {
         total_quantity -= (current_quantity - new_quantity);
         order_manager->modify_order(order_id, new_quantity, new_price);
+        // Modify-to-zero retires the order; its id stays as a dead entry.
+        if(new_quantity==0) live_orders -= 1;
         return order_id;
     }
     order_id_t modified_order_id = addOrder(order->side, order->type, new_price, new_quantity);
@@ -67,35 +83,56 @@ bool BookLevel::cancelOrder(order_id_t order_id) {
     if (!order) return false;
     total_quantity -= order->quantity;
     order_manager->cancel_order(order_id);
-    auto it = lower_bound(orders.begin(), orders.end(), order_id);
-    if (it != orders.end() && *it == order_id) [[likely]] orders.erase(it);
+    // The id is left in place as a dead entry; fills skip it and compact() drops it.
+    live_orders -= 1;
     return true;
 }
 
 int BookLevel::fillOrders(int qty, std::vector<TradeEvent>& filled_orders, order_id_t counter_order_id) {
     int rem_qty = qty;
-    for(order_id_t order_id: orders) {
-        // Nothing left to match against this level's remaining orders.
-        if(rem_qty==0) break;
-
-        int orig_qty = rem_qty;
+    // Orders fill strictly front to back, so every entry that is dead or gets
+    // fully filled sits at `head`: advancing it retires them without a scan.
+    while(rem_qty > 0 && head < orders.size()) {
+        const order_id_t order_id = orders[head];
         const auto order = order_manager->getView(order_id);
-        if(!order) [[unlikely]] continue;
+        if(!order) [[unlikely]] { head += 1; continue; }
 
+        const int orig_qty = rem_qty;
         rem_qty = order_manager->fulfill_order(order_id, rem_qty);
+        const int filled_qty = orig_qty - rem_qty;
 
-        int price = order->price;
-        int filled_qty = orig_qty - rem_qty;
-        if(filled_qty==0) continue;
+        // A zero-quantity resting order retires without trading.
+        if(filled_qty > 0) [[likely]] {
+            // 0 is a transient value for order ID.
+            order_id_t buy_order_id = 0, sell_order_id = 0;
+            if(order->side==OrderSide::BUY) {buy_order_id = order->orderId; sell_order_id = counter_order_id;}
+            else {sell_order_id = order->orderId; buy_order_id = counter_order_id;}
 
-        // 0 is a transient value for order ID.
-        order_id_t buy_order_id = 0, sell_order_id = 0;
-        if(order->side==OrderSide::BUY) {buy_order_id = order->orderId; sell_order_id = counter_order_id;}
-        else {sell_order_id = order->orderId; buy_order_id = counter_order_id;}
+            filled_orders.emplace_back(buy_order_id, sell_order_id, order->price, filled_qty);
+        }
 
-        filled_orders.emplace_back(buy_order_id, sell_order_id, price, filled_qty);
+        // A partial fill leaves the head order resting, and nothing behind it can trade.
+        if(filled_qty < order->quantity) break;
+        head += 1;
+        live_orders -= 1;
     }
-    std::erase_if(orders, [&](order_id_t order_id) { return !order_manager->valid(order_id); });
+    // Fully drained: reset without releasing capacity.
+    if(head==orders.size()) {
+        orders.clear();
+        head = 0;
+    }
     total_quantity = std::max(0, total_quantity - qty);
     return rem_qty;
+}
+
+void BookLevel::compact() {
+    // Single in-place pass: live ids move down over consumed and dead slots,
+    // keeping FIFO order. Shrinking resize() never allocates.
+    size_t out = 0;
+    for(size_t i = head; i < orders.size(); ++i) {
+        if(order_manager->valid(orders[i])) orders[out++] = orders[i];
+    }
+    orders.resize(out);
+    head = 0;
+    live_orders = out;
 }

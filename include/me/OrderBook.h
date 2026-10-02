@@ -20,9 +20,9 @@ class OrderBook {
         OrderBook(OrderBook&&) noexcept;
         OrderBook& operator=(OrderBook&&) noexcept;
 
-        std::vector<std::shared_ptr<BookLevel>> getBuySideView(int numLevels = 1) const;
-        std::vector<std::shared_ptr<BookLevel>> getSellSideView(int numLevels = 1) const;
-        std::pair<std::vector<std::shared_ptr<BookLevel>>, std::vector<std::shared_ptr<BookLevel>>> getOrderBookView(int numLevels = 1) const;
+        std::vector<LevelView> getBuySideView(int numLevels = 1) const;
+        std::vector<LevelView> getSellSideView(int numLevels = 1) const;
+        std::pair<std::vector<LevelView>, std::vector<LevelView>> getOrderBookView(int numLevels = 1) const;
 
         order_id_t addOrder(int price, int quantity, OrderType type, OrderSide side);
         bool cancelOrder(order_id_t orderId);

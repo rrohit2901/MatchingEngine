@@ -56,10 +56,10 @@ TEST(OrderBook, OrderBookView) {
     const auto [bids, asks] = book.getOrderBookView(2);
     ASSERT_EQ(bids.size(), 2u);
     ASSERT_EQ(asks.size(), 2u);
-    EXPECT_EQ(bids[0]->getPrice(), 100); // best bid is the highest
-    EXPECT_EQ(bids[1]->getPrice(), 99);
-    EXPECT_EQ(asks[0]->getPrice(), 101); // best ask is the lowest
-    EXPECT_EQ(asks[1]->getPrice(), 102);
+    EXPECT_EQ(bids[0].price, 100); // best bid is the highest
+    EXPECT_EQ(bids[1].price, 99);
+    EXPECT_EQ(asks[0].price, 101); // best ask is the lowest
+    EXPECT_EQ(asks[1].price, 102);
 
     EXPECT_EQ(book.getBuySideView(1).size(), 1u);
     EXPECT_EQ(book.getSellSideView(1).size(), 1u);
@@ -102,7 +102,7 @@ TEST(OrderBook, ModifyOrderNewPrice) {
 
     const auto bids = book.getBuySideView(5);
     ASSERT_EQ(bids.size(), 1u);
-    EXPECT_EQ(bids.front()->getPrice(), 101);
+    EXPECT_EQ(bids.front().price, 101);
 }
 
 TEST(OrderBook, ModifyOrderSwitchesSide) {
