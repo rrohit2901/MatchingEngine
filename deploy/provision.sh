@@ -24,7 +24,7 @@ apt-get install -yq --no-install-recommends \
     build-essential cmake ninja-build git pkg-config \
     python3 python3-venv python3-dev \
     libcap-dev libsystemd-dev libseccomp-dev \
-    fail2ban unattended-upgrades curl rsync ca-certificates
+    fail2ban unattended-upgrades curl rsync ca-certificates nftables
 systemctl enable --now unattended-upgrades fail2ban
 
 log "Swap (${SWAP_GB} GB): a safety net for the OS and the app; sandboxed runs get none"
@@ -101,6 +101,15 @@ else
     echo "sshd config rejected; removed it" >&2
     exit 1
 fi
+
+log "Per-IP connection limits on the web ports"
+install -d -m 755 /etc/me
+nft -c -f "$HERE/ratelimit.nft"   # check before loading
+install -m 644 "$HERE/ratelimit.nft" /etc/me/ratelimit.nft
+install -m 644 "$HERE/systemd/me-ratelimit.service" /etc/systemd/system/me-ratelimit.service
+systemctl daemon-reload
+systemctl enable me-ratelimit.service
+systemctl restart me-ratelimit.service
 
 if [ -n "$SITE_ADDRESS" ]; then
     log "Caddy: HTTPS for ${SITE_ADDRESS}"

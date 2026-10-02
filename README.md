@@ -298,7 +298,9 @@ src/python/              pybind11 module
 src/main.cpp             demo driver
 python/matching_engine/  Python package (bindings, replay loaders, backtest API, me-backtest CLI)
 strategies/              example strategy (ob_alpha.py) and its config
-docs/                    backtesting guide, replay plan and results, optimization notes
+deploy/                  VM provisioning, release installer, CI deploy entry points (docs/deploy.md)
+webapp/                  Streamlit UI and the sandboxed backtest runner
+docs/                    backtesting and deployment guides, replay and UI plans, optimization notes
 tests/                   10 GoogleTest suites
 tests/python/            pytest suite for the bindings
 bench/                   Google Benchmark suites + latency harness
@@ -364,15 +366,13 @@ class JoinTheBid(Strategy):
 
 A full session (about 2.3 M strategy calls) runs in about 15 s.
 
-There is also a web UI: `pip install '.[web]'` and `streamlit run webapp/app.py`. It has every
+There is also a web UI, live at https://52-65-150-242.sslip.io; to run it yourself: `pip install '.[web]'` and `streamlit run webapp/app.py`. It has every
 setting in a sidebar, a strategy editor, and charts of the result. The guide (strategy API,
 config, the fill model and its limits) is [`docs/backtesting.md`](docs/backtesting.md);
 how it was built and validated is in [`docs/strategy-replay-plan.md`](docs/strategy-replay-plan.md).
 
 ## Next
 
-- A Streamlit front end for the backtester: paste a strategy, run it on the stored day, get
-  the report by email. It needs user code sandboxed first.
 - Replay throughput (0.7–1.2 M records/s without a strategy): the venue id map allocates a
   node per add.
 - Moving the Python binding off `LockQueue`, which needs the SPSC contract argued for a

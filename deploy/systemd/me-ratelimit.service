@@ -1,0 +1,14 @@
+# Per-IP limits on web connections (deploy/ratelimit.nft). Installed by provision.sh.
+[Unit]
+Description=Per-IP connection limits for the backtester web ports
+Before=caddy.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/me/ratelimit.nft
+ExecStop=/usr/sbin/nft delete table inet me_ratelimit
+
+[Install]
+WantedBy=multi-user.target

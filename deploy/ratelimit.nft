@@ -1,0 +1,31 @@
+#!/usr/sbin/nft -f
+# Per-IP limits on web connections (ports 80 and 443), in a table of its own so
+# it never touches other rules. Loaded by me-ratelimit.service (provision.sh).
+#   - at most 30 open connections per address (a browser tab uses a handful)
+#   - at most 60 new connections a minute per address, bursts of 120
+# Over the first: the connection is reset; over the second: dropped.
+# SSH is not affected (fail2ban covers it). Turn off with:
+#   systemctl stop me-ratelimit
+
+table inet me_ratelimit
+delete table inet me_ratelimit
+
+table inet me_ratelimit {
+	set web_conns_v4 {
+		type ipv4_addr
+		flags dynamic
+		size 65536
+	}
+	set web_rate_v4 {
+		type ipv4_addr
+		flags dynamic,timeout
+		timeout 2m
+		size 65536
+	}
+
+	chain input {
+		type filter hook input priority filter - 10; policy accept;
+		tcp dport { 80, 443 } ct state new add @web_conns_v4 { ip saddr ct count over 30 } counter reject with tcp reset
+		tcp dport { 80, 443 } ct state new add @web_rate_v4 { ip saddr limit rate over 60/minute burst 120 packets } counter drop
+	}
+}

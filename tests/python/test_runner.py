@@ -9,7 +9,8 @@ import pyarrow.parquet as pq
 import pytest
 
 from test_backtest import BOOK, DATE, tape
-from webapp.runner import Limits, Runner, Settings, available_data, run_config, validate
+from webapp.runner import (Limits, RateLimiter, RateLimits, Runner, Settings, available_data, run_config,
+                           validate)
 
 GOOD = textwrap.dedent("""
     from matching_engine.backtest import Strategy
@@ -154,3 +155,54 @@ def test_generated_config_round_trips(data_dir):
     assert doc["strategy"]["params"] == params
     assert doc["risk"]["max_capital"] == 1e5
     assert doc["model"]["passive_impact"] is True
+
+
+# --- per-client rate limits ------------------------------------------------------
+
+def test_rate_limiter_one_active_run_per_client():
+    rl = RateLimiter(RateLimits(max_active=1, cooldown_s=0, per_hour=0))
+    assert rl.acquire("a", now=0) is None
+    assert "One at a time" in rl.acquire("a", now=1)
+    assert rl.acquire("b", now=1) is None          # other clients are unaffected
+    rl.release("a", now=2)
+    assert rl.acquire("a", now=3) is None
+
+
+def test_rate_limiter_cooldown_after_a_run():
+    rl = RateLimiter(RateLimits(max_active=0, cooldown_s=30, per_hour=0))
+    assert rl.acquire("a", now=0) is None
+    rl.release("a", now=10)
+    assert rl.acquire("a", now=25) == "Please wait 15 s before the next run."
+    assert rl.acquire("a", now=40) is None
+
+
+def test_rate_limiter_runs_per_rolling_hour():
+    rl = RateLimiter(RateLimits(max_active=0, cooldown_s=0, per_hour=3))
+    for t in (0, 100, 200):
+        assert rl.acquire("a", now=t) is None
+        rl.release("a", now=t + 1)
+    refusal = rl.acquire("a", now=300)
+    assert "3 runs in the last hour" in refusal and "55 min" in refusal
+    assert rl.acquire("a", now=3_600) is None       # the first run has rolled out of the hour
+
+
+def test_rate_limiter_forgets_idle_clients():
+    rl = RateLimiter(RateLimits(max_active=1, cooldown_s=0, per_hour=5))
+    for i in range(1_200):
+        rl.acquire(f"ip{i}", now=0)
+        rl.release(f"ip{i}", now=1)
+    rl.acquire("late", now=7_200)                  # an hour later: the idle ones are pruned
+    assert len(rl._starts) < 10
+
+
+def test_runner_refuses_a_limited_client(data_dir):
+    runner = Runner(data_dir, rate_limits=RateLimits(max_active=1, cooldown_s=60, per_hour=10))
+    first = runner.run(settings(), GOOD, {}, client="1.2.3.4")
+    second = runner.run(settings(), GOOD, {}, client="1.2.3.4")
+    other = runner.run(settings(), GOOD, {}, client="5.6.7.8")
+    assert first.ok and other.ok
+    assert second.error["kind"] == "rate_limited" and "Please wait" in second.error["message"]
+    # Invalid requests never count against the limits.
+    bad = runner.run(settings(date="2020-01-01"), GOOD, {}, client="9.9.9.9")
+    assert bad.error["kind"] == "invalid"
+    assert runner.run(settings(), GOOD, {}, client="9.9.9.9").ok

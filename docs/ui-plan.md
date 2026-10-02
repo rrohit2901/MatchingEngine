@@ -339,8 +339,15 @@ U0–U2 done on `feature/web-ui` (2026-10-03). A running UI locally with `LocalB
   NVDA takes 23.5 s and 588 MB. Both are well inside the 120 s and 1.5 GB limits, and the
   AAPL PnL matches the CLI.
 
-Next: U3 (abuse protection) and U4 (isolate backend, provisioning, deploy workflow), once a
-VM is chosen.
+U3 and U4 done (2026-10-03), on AWS instead of Oracle: an EC2 t4g.small at
+https://52-65-150-242.sslip.io (Caddy + Let's Encrypt; no domain).
+- **Sizing:** 1 run at a time, a queue of 10, 1 GB per run.
+- **Sandbox:** isolate, checked before every release goes live.
+- **Deploys:** CI on every push to `main`, through a forced-command key.
+- **Abuse protection:** per-IP run limits (1 active, 30 s apart, 20 an hour) and per-IP
+  connection limits (nftables).
+
+How to run, rebuild and take it down: [`deploy.md`](deploy.md).
 
 ## Decisions log
 All five open questions were answered on 2026-10-03 and are recorded in the table under
