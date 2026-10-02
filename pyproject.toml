@@ -14,9 +14,15 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+# The replay and backtest tests need what `backtest` needs.
+test = ["pytest>=7", "numpy", "pyarrow>=14", "tomli>=1.1; python_version < '3.11'"]
 # scripts/fetch_databento.py, convert_mbo.py and inspect_mbo.py
 data = ["databento>=0.40", "pyarrow>=14", "numpy"]
+# me-backtest: reading the converted Parquet data and the TOML config
+backtest = ["pyarrow>=14", "numpy", "tomli>=1.1; python_version < '3.11'"]
+
+[project.scripts]
+me-backtest = "matching_engine.cli:main"
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"

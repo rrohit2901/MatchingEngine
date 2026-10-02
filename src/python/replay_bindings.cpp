@@ -6,10 +6,14 @@
 // hundreds of megabytes; a wrong dtype is a bug in the loader and raises instead.
 
 #include "ReplayValidator.h"
+#include "Simulator.h"
 
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/functional.h>
+#include <pybind11/stl.h>
 
+#include <algorithm>
 #include <span>
 #include <string>
 
@@ -60,7 +64,11 @@ py::dict statsDict(const ReplayStats& s) {
     return d;
 }
 
-py::dict validate(const py::dict& mbo_columns, const py::dict& mbp1_columns, size_t max_examples) {
+py::dict reportDict(const ValidationReport& report);
+
+template <typename Validate>
+py::dict validateWithGilReleased(const py::dict& mbo_columns, const py::dict& mbp1_columns, size_t max_examples,
+                                 Validate validate_fn) {
     const MboEvents mbo = mboFrom(mbo_columns);
     const Mbp1Events mbp = mbp1From(mbp1_columns);
     if (!mbo.consistent() || !mbp.consistent()) throw py::value_error("columns have different lengths");
@@ -69,8 +77,20 @@ py::dict validate(const py::dict& mbo_columns, const py::dict& mbp1_columns, siz
     {
         // The arrays stay alive in the caller's dicts; the replay touches no Python objects.
         py::gil_scoped_release release;
-        report = validateAgainstMbp1(mbo, mbp, max_examples);
+        report = validate_fn(mbo, mbp, max_examples);
     }
+    return reportDict(report);
+}
+
+py::dict validate(const py::dict& mbo_columns, const py::dict& mbp1_columns, size_t max_examples) {
+    return validateWithGilReleased(mbo_columns, mbp1_columns, max_examples, validateAgainstMbp1);
+}
+
+py::dict validateSimulator(const py::dict& mbo_columns, const py::dict& mbp1_columns, size_t max_examples) {
+    return validateWithGilReleased(mbo_columns, mbp1_columns, max_examples, validateSimulatorAgainstMbp1);
+}
+
+py::dict reportDict(const ValidationReport& report) {
 
     py::list examples;
     for (const auto& m : report.examples) {
@@ -92,6 +112,50 @@ py::dict validate(const py::dict& mbo_columns, const py::dict& mbp1_columns, siz
     return out;
 }
 
+py::dict simStatsDict(const SimStats& s) {
+    py::dict d;
+    d["venue"] = statsDict(s.venue);
+    d["timer_calls"] = s.timer_calls;
+    d["orders_submitted"] = s.orders_submitted;
+    d["orders_rejected"] = s.orders_rejected;
+    d["orders_cancelled"] = s.orders_cancelled;
+    d["fills"] = s.fills;
+    d["maker_qty"] = s.maker_qty;
+    d["taker_qty"] = s.taker_qty;
+    d["ahead_fill_qty"] = s.ahead_fill_qty;
+    d["sweep_qty"] = s.sweep_qty;
+    d["unfilled_venue_qty"] = s.unfilled_venue_qty;
+    d["clamped_cancels"] = s.clamped_cancels;
+    d["orphaned_orders"] = s.orphaned_orders;
+    d["orphaned_qty"] = s.orphaned_qty;
+    d["crossing_add_qty"] = s.crossing_add_qty;
+    return d;
+}
+
+py::tuple orderTuple(const StrategyOrder& o) {
+    return py::make_tuple(o.client_id, o.side, o.price, o.quantity, o.filled, o.ioc,
+                          to_string(o.status), o.reject_reason, o.ts_sent, o.ts_arrival);
+}
+
+py::tuple fillTuple(const StrategyFill& f) {
+    return py::make_tuple(f.ts, f.client_id, f.side, f.price, f.quantity, f.maker, to_string(f.source));
+}
+
+py::list levels(const std::vector<LevelView>& view) {
+    py::list out;
+    for (const LevelView& level : view) out.append(py::make_tuple(level.price, level.quantity));
+    return out;
+}
+
+// Keeps the MBO arrays alive and in place while a Simulator runs over them.
+void runSimulator(Simulator& sim, const py::dict& mbo_columns, const py::function& on_timer) {
+    const MboEvents events = mboFrom(mbo_columns);
+    if (!events.consistent()) throw py::value_error("columns have different lengths");
+    // The GIL stays held: on_timer is Python. An exception raised in it unwinds
+    // through run() and surfaces here unchanged.
+    sim.run(events, [&on_timer](Simulator&) { on_timer(); });
+}
+
 }  // namespace
 
 void bindReplay(py::module_& m) {
@@ -100,4 +164,83 @@ void bindReplay(py::module_& m) {
           "Replay MBO columns into an order book and compare its top of book with mbp-1\n"
           "after every event. Both arguments map column name -> numpy array, as loaded by\n"
           "matching_engine.replay. Returns a dict of counters and the first mismatches.");
+    m.def("validate_simulator", &validateSimulator, py::arg("mbo"), py::arg("mbp1"), py::arg("max_examples") = 20,
+          "validate_replay, but through the strategy Simulator with no strategy: its\n"
+          "reconciliation logic must leave the book exactly as the plain replay does.");
+
+    py::class_<SimConfig>(m, "SimConfig", "Simulator settings. Times in nanoseconds, prices in 1e-4 $ ticks.")
+        .def(py::init<>())
+        .def_readwrite("order_latency_ns", &SimConfig::order_latency_ns)
+        .def_readwrite("md_latency_ns", &SimConfig::md_latency_ns)
+        .def_readwrite("timer_interval_ns", &SimConfig::timer_interval_ns)
+        .def_readwrite("trade_start_ns", &SimConfig::trade_start_ns)
+        .def_readwrite("trade_end_ns", &SimConfig::trade_end_ns)
+        .def_readwrite("price_increment", &SimConfig::price_increment)
+        .def_readwrite("max_position", &SimConfig::max_position)
+        .def_readwrite("risk", &SimConfig::risk)
+        .def_readwrite("maker_fee", &SimConfig::maker_fee)
+        .def_readwrite("taker_fee", &SimConfig::taker_fee)
+        .def_readwrite("passive_impact", &SimConfig::passive_impact)
+        .def_readwrite("pnl_sample_interval_ns", &SimConfig::pnl_sample_interval_ns);
+
+    py::class_<Simulator>(m, "Simulator", R"doc(
+One strategy trading into a replayed Nasdaq book (include/replay/Simulator.h).
+
+Low-level: matching_engine.backtest wraps it with dollar prices and a Strategy
+class. Prices here are int ticks of 1e-4 $, times are UTC nanoseconds.
+)doc")
+        .def(py::init<SimConfig>(), py::arg("config"))
+        .def("run", &runSimulator, py::arg("mbo"), py::arg("on_timer"),
+             "Replay the MBO columns, calling on_timer() every timer interval in the trading window.")
+        .def("submit", &Simulator::submit, py::arg("side"), py::arg("price"), py::arg("quantity"), py::arg("ioc") = false)
+        .def("cancel", &Simulator::cancel, py::arg("client_id"))
+        .def("cancel_all", &Simulator::cancelAll)
+        .def_property_readonly("now", &Simulator::now)
+        .def_property_readonly("position", &Simulator::position)
+        .def_property_readonly("cash_ticks", &Simulator::cashTicks)
+        .def_property_readonly("fees", &Simulator::fees)
+        .def("mark_to_market", &Simulator::markToMarket)
+        .def("book", [](const Simulator& s, unsigned n) {
+                 return py::make_tuple(levels(s.getBook().getBuySideView(static_cast<int>(n))),
+                                       levels(s.getBook().getSellSideView(static_cast<int>(n))));
+             }, py::arg("levels") = 5, "(bids, asks): lists of (price, quantity), best first.")
+        .def("best", [](const Simulator& s, OrderSide side) -> py::object {
+                 const auto level = s.getBook().getTopLevel(side);
+                 if (!level) return py::none();
+                 return py::make_tuple(level->price, level->quantity);
+             }, py::arg("side"), "(price, quantity) of the best level on one side, or None.")
+        .def_property_readonly("fill_count", [](const Simulator& s) { return s.fills().size(); })
+        .def("fills", [](const Simulator& s, size_t start) {
+                 py::list out;
+                 const auto& all = s.fills();
+                 for (size_t i = start; i < all.size(); ++i) out.append(fillTuple(all[i]));
+                 return out;
+             }, py::arg("start") = 0,
+             "Fills from index `start` on, as (ts, client_id, side, price, quantity, maker, source).")
+        .def("order", [](const Simulator& s, uint64_t client_id) -> py::object {
+                 const auto it = s.orders().find(client_id);
+                 if (it == s.orders().end()) return py::none();
+                 return orderTuple(it->second);
+             }, py::arg("client_id"),
+             "(client_id, side, price, quantity, filled, ioc, status, reject_reason, ts_sent, ts_arrival).")
+        .def("orders", [](const Simulator& s, bool live_only) {
+                 py::list out;
+                 if (live_only) {
+                     for (const uint64_t id : s.liveOrderIds()) out.append(orderTuple(s.orders().at(id)));
+                 } else {
+                     std::vector<const StrategyOrder*> all;
+                     all.reserve(s.orders().size());
+                     for (const auto& [id, o] : s.orders()) all.push_back(&o);
+                     std::sort(all.begin(), all.end(), [](auto* a, auto* b) { return a->client_id < b->client_id; });
+                     for (const StrategyOrder* o : all) out.append(orderTuple(*o));
+                 }
+                 return out;
+             }, py::arg("live_only") = true,
+             "Orders as order() tuples, oldest first; by default only PENDING and OPEN ones.")
+        .def("equity_curve", [](const Simulator& s) {
+                 py::list out;
+                 for (const auto& e : s.equityCurve()) out.append(py::make_tuple(e.ts, e.position, e.cash_ticks, e.mid_x2, e.fees));
+                 return out;
+             }, "Samples of (ts, position, cash_ticks, mid_x2, fees).")
+        .def("stats", [](const Simulator& s) { return simStatsDict(s.getStats()); });
 }

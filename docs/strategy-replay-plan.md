@@ -20,7 +20,9 @@ email delivery and deployment come later.
 - **Storage:** **Parquet**, with the raw `.dbn.zst` files kept as the source of truth.
 - **One symbol per backtest run.** This keeps the original single-symbol design: one
   `OrderBook` per run.
-- **Fill model: synthetic aggressors**, so the strategy has market impact (details below).
+- **Fill model:** strategy orders are filled by real executions that reach their queue
+  position. Aggressive strategy orders take real liquidity. Passive fills leave the venue's
+  orders as recorded by default. This was revised in Phase 2; see the Phases 2–4 results.
 - **Strategy callback: fixed timer every 10-20 ms of simulated time** (configurable,
   default 10 ms). No event-driven callbacks in the first version.
 
@@ -257,6 +259,72 @@ seconds), but well below what the book should do. Likely costs, not yet profiled
   reconciliation counters, run time), plus an optional CSV of fills and PnL.
 - **Example strategy:** `strategies/ob_alpha.py` keeps fixed-size quotes on one side of the
   book, with more quantity on the top 5 levels.
+
+### Phases 2–4 results (done)
+How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Simulator.h`.
+
+**What was built**
+- **`Simulator`** (`include/replay/Simulator.h`, `src/replay/Simulator.cpp`):
+  - One clock merges strategy actions arriving at the exchange, venue records and the
+    strategy timer. At equal times the order is action, then venue, then timer.
+  - Market-data latency is folded into the action delay.
+  - Gateway checks: price grid, position limit, trading window.
+  - Exchange checks on arrival: `RiskManager`, and self-trade prevention.
+  - IOC orders.
+  - Fees, an equity curve, and reconciliation counters.
+- **Python** (`python/matching_engine/backtest.py`): `Strategy` (`on_start`, `on_timer`,
+  `on_end`), `Context` (dollar prices), `BacktestConfig` and `run_backtest`.
+- **`me-backtest`** (`python/matching_engine/cli.py`):
+  - `run`: TOML config plus flag overrides, `--param`, and CSV outputs.
+  - `validate` (`--through-simulator`).
+- **Example:** `strategies/ob_alpha.py` and `.toml`.
+- **Tests:** 14 gtest cases (`tests/test_simulator.cpp`) and 5 pytest cases
+  (`tests/python/test_backtest.py`).
+
+**Departures from the plan above, and why**
+- **No owner tag or timestamps in `Order` / `OrderManager`.**
+  - The simulator keeps strategy orders in its own table, keyed by engine id, with
+    `ts_sent` and `ts_arrival`.
+  - That keeps the engine's 32-byte slot and the hot path untouched.
+  - The engine gained only read access to a level's FIFO queue
+    (`OrderBook::getLevelQueue`).
+- **Executions are not re-matched as one synthetic aggressor.** Each venue `F` names the
+  order it hit, so the simulator works per fill:
+  1. Strategy orders queued ahead of that order at its price are filled first.
+  2. The named order is reduced next.
+  3. If the strategy already took the named order's size, the fill continues down the
+     queue (`SWEEP`).
+
+  This reproduces the venue exactly when there is no strategy, without assuming the
+  venue's matching is plain FIFO. (About 1% of fills price away from the order's
+  displayed price.)
+- **Passive fills have no impact by default (`passive_impact = false`).**
+  - The first version conserved execution quantity: a fill the strategy took ahead in the
+    queue was taken out of the venue order behind it.
+  - That left venue orders holding size Nasdaq had already retired. On AAPL with OB alpha
+    that came to 24,591 orphaned orders and 568,120 phantom shares by the close.
+  - Now the venue's orders change exactly as recorded, and the strategy is filled in
+    addition. It stays available as `passive_impact = true`.
+  - Aggressive strategy orders always take real liquidity, and the venue's later records
+    for those orders are clamped or swept.
+- **Callbacks use a fixed timer only** (default 10 ms), as decided. Fills since the last
+  call arrive in `ctx.fills`.
+
+**Checks on 2026-09-29**
+- **No strategy:** the `Simulator` with no strategy matches `mbp-1` on all 2,846,628
+  comparisons (`me-backtest validate --through-simulator`). So the reconciliation logic
+  is neutral when there is nothing to reconcile.
+- **OB alpha on AAPL** (both sides, top 5 levels, $5,000 × weights 5..1, ±1,500 shares,
+  50 + 20 µs latency):
+  - PnL −$20,152, with 707k shares bought and 708k sold, all of it as maker.
+  - By source: 826k `CROSSING_ADD` (stale quotes picked off) and 590k `AHEAD_IN_QUEUE`.
+  - 6,700 `SELF_TRADE` rejects.
+  - Zero orphans, sweeps, clamped cancels and venue anomalies.
+  - 14.5 s for 2.33 M strategy calls.
+- **PnL reconciles with the fill log exactly** (TSLA: −$18,776.63 both ways), and two runs
+  give identical fills.
+- **Latency changes the outcome as expected.** On TSLA: 48,392 fills at 0 µs, 48,334 at
+  1 ms and 48,290 at 10 ms.
 
 ### Later (out of scope)
 - Streamlit UI.

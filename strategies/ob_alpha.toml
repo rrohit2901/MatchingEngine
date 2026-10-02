@@ -1,0 +1,49 @@
+# Backtest config for strategies/ob_alpha.py. Every key is optional except
+# [data] date/symbol and [strategy] path; any of them can be overridden with a
+# me-backtest flag (me-backtest run --help).
+#
+#   me-backtest run --config strategies/ob_alpha.toml
+
+[data]
+date = "2026-09-29"
+symbol = "AAPL"                  # one symbol per run: AAPL, NVDA or TSLA for this day
+dir = "data/databento"           # written by scripts/convert_mbo.py
+
+[session]
+start = "09:31:00"               # New York time; one minute clear of the opening auction
+end = "15:59:00"                 # stop before the closing auction; open orders are cancelled here
+timer_ms = 10                    # strategy callback interval, exchange time
+
+[latency]
+order_us = 50                    # strategy -> exchange
+market_data_us = 20              # exchange -> strategy; adds to the order delay
+
+[risk]
+max_position = 2_000             # shares, long or short, counting open orders; 0 = no limit
+max_order_qty = 10_000
+min_order_qty = 1
+max_price_deviation = 1.00       # dollars from the same-side best price
+
+[fees]
+maker = 0.0                      # dollars per share; negative = rebate (e.g. -0.0020)
+taker = 0.0                      # (e.g. 0.0030)
+
+[model]
+passive_impact = false           # true: passive fills take quantity away from venue orders (see Simulator.h)
+
+[strategy]
+path = "strategies/ob_alpha.py"
+
+[strategy.params]
+side = "both"                    # buy, sell or both
+levels = 5
+order_value = 5_000.0            # dollars per order before weighting
+weights = [5, 4, 3, 2, 1]        # level 1 (the touch) first
+max_position = 1_500
+requote_every = 10               # timer calls between requotes: 100 ms at timer_ms = 10
+
+[output]
+pnl_sample_ms = 1_000
+# fills_csv = "logs/ob_alpha_fills.csv"
+# equity_csv = "logs/ob_alpha_equity.csv"
+# orders_csv = "logs/ob_alpha_orders.csv"

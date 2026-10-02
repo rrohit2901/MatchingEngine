@@ -127,6 +127,7 @@ set_target_properties(me_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(me_replay
     src/replay/MarketReplayer.cpp
     src/replay/ReplayValidator.cpp
+    src/replay/Simulator.cpp
 )
 target_include_directories(me_replay PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/replay)
 target_link_libraries(me_replay PUBLIC me_core PRIVATE project_warnings project_options)

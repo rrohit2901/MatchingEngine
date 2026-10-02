@@ -104,7 +104,7 @@ Full methodology, caveats, and the Google Benchmark suites: [`bench/README.md`](
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # 8 suites
+ctest --test-dir build --output-on-failure   # 10 suites
 ./build/me_main                              # demo; writes logs/matching_engine.log
 ```
 
@@ -266,14 +266,18 @@ include/me/              engine headers (templated: MatchingEngine, Matcher, Eve
 include/risk_manager/    RiskManager, RiskParams
 include/data_structures/ LockQueue, RingBuffer (lock-free SPSC)
 include/event_handler/   Logger, EventQueue.h (binds the ring buffer capacity)
+include/replay/          MBO replay, mbp-1 validation, strategy Simulator
+src/replay/              replay sources
 src/me/                  engine sources
 src/python/              pybind11 module
 src/main.cpp             demo driver
-python/matching_engine/  Python package
-tests/                   8 GoogleTest suites
+python/matching_engine/  Python package (bindings, replay loaders, backtest API, me-backtest CLI)
+strategies/              example strategy (ob_alpha.py) and its config
+docs/                    backtesting guide, replay plan and results, optimization notes
+tests/                   10 GoogleTest suites
 tests/python/            pytest suite for the bindings
 bench/                   Google Benchmark suites + latency harness
-scripts/                 Databento market data download, conversion, inspection
+scripts/                 Databento market data download, conversion, inspection, validation
 ```
 
 Build options — all default to the historical build, so a plain configure is unchanged:
@@ -307,11 +311,39 @@ python3 scripts/inspect_mbo.py --date 2026-09-29 --symbol AAPL  # checks the MBO
 python3 scripts/validate_replay.py --date 2026-09-29 --symbols AAPL NVDA TSLA  # replay vs Nasdaq's top of book
 ```
 
-The full replay and backtesting plan is in [`docs/strategy-replay-plan.md`](docs/strategy-replay-plan.md).
+The rebuilt book matches Nasdaq's top of book after every event: 2,846,628 comparisons
+across the three symbols, with no mismatches.
+
+## Backtesting
+
+`me-backtest` replays one symbol-day and lets a Python strategy trade into the real book:
+its orders queue behind real orders, get filled when real executions reach them, take real
+liquidity when they cross, and reach the exchange after a configurable latency.
+
+```bash
+pip install '.[backtest]'
+me-backtest run --config strategies/ob_alpha.toml                  # example: quotes the top 5 levels
+me-backtest run --strategy my_strategy.py --date 2026-09-29 --symbol NVDA --order-latency-us 100
+```
+
+```python
+from matching_engine.backtest import Strategy
+
+class JoinTheBid(Strategy):
+    def on_timer(self, ctx):                       # every 10 ms of exchange time
+        if ctx.best_bid and not ctx.open_orders and ctx.position < 1_000:
+            ctx.buy(ctx.best_bid.price, 100)
+```
+
+A full session (about 2.3 M strategy calls) runs in about 15 s. The guide (strategy API,
+config, the fill model and its limits) is [`docs/backtesting.md`](docs/backtesting.md);
+how it was built and validated is in [`docs/strategy-replay-plan.md`](docs/strategy-replay-plan.md).
 
 ## Next
 
-- A C++ replay of the Databento MBO data through the engine.
-- A Python strategy backtester and CLI on top of it.
+- A Streamlit front end for the backtester: paste a strategy, run it on the stored day, get
+  the report by email. It needs user code sandboxed first.
+- Replay throughput (0.7–1.2 M records/s without a strategy): the venue id map allocates a
+  node per add.
 - Moving the Python binding off `LockQueue`, which needs the SPSC contract argued for a
   facade whose engine can be driven from different OS threads across calls.

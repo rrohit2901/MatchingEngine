@@ -6,6 +6,7 @@
 
 #include <vector>
 #include <memory>
+#include <span>
 
 // What readers of the book get per level: a value snapshot, not a handle onto
 // the live level.
@@ -47,6 +48,12 @@ class BookLevel {
         std::vector<order_id_t> getAllOrders() const;
         int getPrice() const;
         LevelView getView() const;
+        // Ids in time priority, front of the queue first. May include dead
+        // (cancelled or filled) ids, which callers skip; valid only until the
+        // level next changes.
+        std::span<const order_id_t> queue() const {
+            return {orders.data() + head, orders.size() - head};
+        }
 
         // Re-arms an emptied level for a new price, keeping the order vector's
         // capacity so a recycled level costs no allocation.

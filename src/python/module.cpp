@@ -292,7 +292,6 @@ PYBIND11_MODULE(_core, m) {
     m.doc() = "Single-symbol C++ matching engine.";
 
     PyMatchingEngine::installForkHandlers();
-    bindReplay(m);
 
     py::enum_<OrderSide>(m, "OrderSide")
         .value("BUY", OrderSide::BUY)
@@ -386,4 +385,7 @@ fork() -- and will raise if you try.
     // capsule's destructor runs at module teardown. Without it the process would
     // exit without joining the logger thread, losing the tail of the log.
     m.add_object("_close_all_at_exit", py::capsule([] { PyMatchingEngine::closeAll(); }));
+
+    // After OrderSide and RiskParams, which the replay's signatures use.
+    bindReplay(m);
 }

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ._core import PRICE_UNDEF, validate_replay
+from ._core import PRICE_UNDEF, validate_replay, validate_simulator
 
 MBO_COLUMNS = {
     "ts_recv": np.uint64,
@@ -39,7 +39,7 @@ MBP1_COLUMNS = {
 
 DEFAULT_DATA_DIR = Path("data/databento")
 
-__all__ = ["PRICE_UNDEF", "load_mbo", "load_mbp1", "data_paths", "validate", "MBO_COLUMNS", "MBP1_COLUMNS"]
+__all__ = ["PRICE_UNDEF", "validate_replay", "validate_simulator", "load_mbo", "load_mbp1", "data_paths", "validate", "MBO_COLUMNS", "MBP1_COLUMNS"]
 
 
 def _load(path: Path, columns: dict[str, type]) -> dict[str, np.ndarray]:
