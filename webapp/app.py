@@ -92,7 +92,8 @@ class Job:
     """One run, executed on a thread so that touching a widget (which reruns this
     script) never interrupts it. The thread only sets attributes; the page polls."""
 
-    def __init__(self, settings: Settings, code: str, params: dict, client: str):
+    def __init__(self, settings: Settings, code: str, params: dict, client: str, label: str = ""):
+        self.label = label   # display only: the backtest never sees it
         self.status = Status("queued")
         self.result: RunResult | None = None
         self.started = time.time()
@@ -308,14 +309,37 @@ def prepared(result: RunResult) -> dict:
     return cache[key]
 
 
-def show_result(result: RunResult) -> None:
+LABEL_MAX = 60
+
+
+def clean_label(text: str) -> str:
+    """One line, at most LABEL_MAX characters."""
+    return " ".join((text or "").split())[:LABEL_MAX]
+
+
+def md_literal(text: str) -> str:
+    """Show text as typed in a Markdown heading: no bold, links or headings from it."""
+    return "".join("\\" + ch if ch in "\\`*_{}[]()#+-.!|<>~" else ch for ch in text)
+
+
+def file_slug(text: str) -> str:
+    slug = "".join(ch.lower() if ch.isascii() and ch.isalnum() else "-" for ch in text)
+    return "-".join(part for part in slug.split("-") if part)[:40]
+
+
+def show_result(result: RunResult, label: str = "") -> None:
     if not result.ok:
         show_error(result)
         return
     r = result.result
     s, cfg = r["summary"], r["config"]
     data = prepared(result)
-    st.subheader(f"{r['strategy']['name']} on {cfg['symbol']}, {cfg['date']}")
+    what = f"{r['strategy']['name']} on {cfg['symbol']}, {cfg['date']}"
+    if label:
+        st.subheader(md_literal(label))
+        st.markdown(f"**{md_literal(what)}**")
+    else:
+        st.subheader(what)
     st.caption(f"Window {cfg['start']}–{cfg['end']} New York · timer {cfg['timer_ms']:g} ms · latency "
                f"{cfg['order_latency_us']:g} + {cfg['md_latency_us']:g} µs · passive impact "
                f"{'on' if cfg['passive_impact'] else 'off'} · self-trade prevention "
@@ -376,13 +400,14 @@ def show_result(result: RunResult) -> None:
     # Fills and orders are downloads only: tables of tens of thousands of rows made the
     # page sluggish. Downloading doesn't rerun the page (on_click="ignore").
     c1, c2, _ = st.columns([1, 1, 2])
-    c1.download_button(f"Download fills ({s['fills']:,}) as CSV", result.fills_csv, "fills.csv", "text/csv",
+    suffix = f"-{file_slug(label)}" if file_slug(label) else ""
+    c1.download_button(f"Download fills ({s['fills']:,}) as CSV", result.fills_csv, f"fills{suffix}.csv", "text/csv",
                        on_click="ignore", width="stretch")
-    c2.download_button(f"Download orders ({s['orders']:,}) as CSV", result.orders_csv, "orders.csv", "text/csv",
+    c2.download_button(f"Download orders ({s['orders']:,}) as CSV", result.orders_csv, f"orders{suffix}.csv", "text/csv",
                        on_click="ignore", width="stretch")
 
     with st.expander("Run details"):
-        st.json({"settings": cfg, "strategy": r["strategy"], "timings": r["timings"]}, expanded=False)
+        st.json({"label": label, "settings": cfg, "strategy": r["strategy"], "timings": r["timings"]}, expanded=False)
         if result.log.strip():
             st.markdown("**What the strategy printed**")
             st.code(result.log, language="text")
@@ -401,6 +426,10 @@ def main() -> None:
 
     job: Job | None = st.session_state.get("job")
     running, waiting = runner().queue_length()
+    label = st.text_input("Run label (optional)", key="label", max_chars=LABEL_MAX,
+                          placeholder="e.g. OB alpha, 3 levels, 100 µs latency",
+                          help="Shown as the results heading and in the downloaded file names. "
+                               "Without one, the heading is your Strategy class's name.")
     c1, c2 = st.columns([1, 4])
     clicked = c1.button("Run backtest", type="primary", disabled=job is not None or settings is None,
                         width="stretch")
@@ -416,14 +445,14 @@ def main() -> None:
             st.error(f"The parameters are not valid TOML: {exc}")
         else:
             st.session_state.pop("notice", None)
-            st.session_state.job = Job(settings, code, params, client_ip())
+            st.session_state.job = Job(settings, code, params, client_ip(), clean_label(label))
             st.rerun()
 
     if "notice" in st.session_state:
         st.warning(st.session_state.notice)
     progress_panel()
     if "result" in st.session_state:
-        show_result(st.session_state.result)
+        show_result(st.session_state.result, st.session_state.get("result_label", ""))
 
 
 @st.fragment(run_every=1.0)
@@ -437,6 +466,7 @@ def progress_panel() -> None:
             st.session_state.notice = job.result.error["message"]
         else:
             st.session_state.result = job.result
+            st.session_state.result_label = job.label
         del st.session_state["job"]
         st.rerun(scope="app")
         return
