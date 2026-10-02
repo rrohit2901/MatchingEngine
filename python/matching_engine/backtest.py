@@ -79,7 +79,7 @@ class Fill(NamedTuple):
     price: float
     quantity: int
     maker: bool
-    source: str         # AGGRESSIVE, AHEAD_IN_QUEUE, SWEEP or CROSSING_ADD
+    source: str         # AGGRESSIVE, AHEAD_IN_QUEUE, SWEEP, CROSSING_ADD or SELF_TRADE
 
 
 class Order(NamedTuple):
@@ -234,9 +234,12 @@ class BacktestConfig:
     maker_fee: float = 0.0           # dollars per share; negative = rebate
     taker_fee: float = 0.0
     pnl_sample_ms: float = 1_000.0
-    # See SimConfig::passive_impact. False keeps the venue's orders exactly as
-    # recorded when the strategy is filled passively.
-    passive_impact: bool = False
+    # See SimConfig::passive_impact. True (default) takes what the strategy is
+    # filled passively out of the venue order behind it; False leaves the
+    # venue's orders exactly as recorded.
+    passive_impact: bool = True
+    # Nasdaq lets self-trades execute unless the firm opts in to prevention.
+    self_trade_prevention: bool = False
 
     def ny_to_utc_ns(self, clock: str) -> int:
         day = Date.fromisoformat(self.date)
@@ -258,6 +261,7 @@ class BacktestConfig:
         c.taker_fee = float(self.taker_fee)
         c.pnl_sample_interval_ns = int(self.pnl_sample_ms * 1e6)
         c.passive_impact = bool(self.passive_impact)
+        c.self_trade_prevention = bool(self.self_trade_prevention)
         return c
 
 

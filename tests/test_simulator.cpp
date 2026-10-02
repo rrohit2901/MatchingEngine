@@ -92,9 +92,15 @@ TEST(Simulator, WithoutStrategyMatchesThePlainReplay) {
     EXPECT_EQ(sim.getStats().venue.unknown_order, 0u);
 }
 
-SimConfig withImpact() {
+SimConfig withImpact() {   // the default, spelled out where a test depends on it
     SimConfig c = config();
     c.passive_impact = true;
+    return c;
+}
+
+SimConfig withoutImpact() {
+    SimConfig c = config();
+    c.passive_impact = false;
     return c;
 }
 
@@ -109,10 +115,10 @@ Tape aheadTape() {
 
 TEST(Simulator, OrderAheadInQueueIsFilledWithoutTouchingTheVenueOrders) {
     uint64_t id = 0;
-    const Simulator sim = runWith(aheadTape(), config(), 100, [&](Simulator& s) { id = s.submit(OrderSide::SELL, P, 3); });
+    const Simulator sim = runWith(aheadTape(), withoutImpact(), 100, [&](Simulator& s) { id = s.submit(OrderSide::SELL, P, 3); });
     EXPECT_EQ(order(sim, id).filled, 3);
     EXPECT_EQ(sim.fills()[0].source, FillSource::AHEAD_IN_QUEUE);
-    // Default model: Y still loses all 4, exactly as the venue recorded.
+    // Without passive impact Y still loses all 4, exactly as the venue recorded.
     EXPECT_EQ(restingAt(sim, OrderSide::SELL, P), 6);
     EXPECT_EQ(sim.getStats().orphaned_orders, 0u);
 }
@@ -180,10 +186,10 @@ TEST(Simulator, VenueAddCrossingAStrategyQuoteTradesWithIt) {
     tape.rec(10, 'A', 'A', P + 2 * CENT, 10, 1)   // venue ask at 100.02
         .rec(300, 'A', 'B', P + CENT, 5, 2);      // venue bid at 100.01 meets the strategy's 100.01 ask
     uint64_t id = 0;
-    const Simulator sim = runWith(tape, config(), 100, [&](Simulator& s) { id = s.submit(OrderSide::SELL, P + CENT, 3); });
+    const Simulator sim = runWith(tape, withoutImpact(), 100, [&](Simulator& s) { id = s.submit(OrderSide::SELL, P + CENT, 3); });
     EXPECT_EQ(order(sim, id).filled, 3);
     EXPECT_EQ(sim.fills()[0].source, FillSource::CROSSING_ADD);
-    EXPECT_EQ(restingAt(sim, OrderSide::BUY, P + CENT), 5);   // default: the add rests as recorded
+    EXPECT_EQ(restingAt(sim, OrderSide::BUY, P + CENT), 5);   // without impact: the add rests as recorded
     EXPECT_EQ(sim.getStats().crossing_add_qty, 3);
 
     const Simulator impact = runWith(tape, withImpact(), 100, [&](Simulator& s) { s.submit(OrderSide::SELL, P + CENT, 3); });
@@ -261,13 +267,58 @@ TEST(Simulator, GatewayAndVenueRejections) {
         ids.push_back(s.submit(OrderSide::BUY, P + 50, 1));        // off the cent grid
         ids.push_back(s.submit(OrderSide::BUY, P, 6));             // past the position limit
         ids.push_back(s.submit(OrderSide::BUY, P, 3));             // fine: rests
-        ids.push_back(s.submit(OrderSide::SELL, P, 1));            // would trade with our own bid
     });
     EXPECT_STREQ(order(sim, ids[0]).reject_reason, "PRICE_INCREMENT");
     EXPECT_STREQ(order(sim, ids[1]).reject_reason, "POSITION_LIMIT");
     EXPECT_EQ(order(sim, ids[2]).status, StrategyOrderStatus::CANCELLED);   // cancelled at end of trading
-    EXPECT_STREQ(order(sim, ids[3]).reject_reason, "SELF_TRADE");
-    EXPECT_EQ(sim.getStats().orders_rejected, 3u);
+    EXPECT_EQ(sim.getStats().orders_rejected, 2u);
+}
+
+namespace {
+// The strategy rests a bid at 100.00, then sends a sell at 100.00 that crosses it.
+Simulator selfCross(SimConfig c, uint64_t& bid, uint64_t& sell) {
+    Tape tape;
+    tape.rec(10, 'A', 'A', P + CENT, 10, 1).rec(1'000, 'N', 'N', 0, 0, 0);
+    c.maker_fee = -0.002;
+    c.taker_fee = 0.003;
+    int calls = 0;
+    Simulator sim(c);
+    sim.run(tape.events(), [&](Simulator& s) {
+        ++calls;
+        if (calls == 1) bid = s.submit(OrderSide::BUY, P, 3);
+        if (calls == 2) sell = s.submit(OrderSide::SELL, P, 2);
+    });
+    return sim;
+}
+}  // namespace
+
+TEST(Simulator, SelfTradeExecutesByDefault) {
+    uint64_t bid = 0, sell = 0;
+    const Simulator sim = selfCross(config(), bid, sell);
+
+    EXPECT_EQ(order(sim, sell).status, StrategyOrderStatus::FILLED);
+    EXPECT_EQ(order(sim, bid).filled, 2);
+    ASSERT_EQ(sim.fills().size(), 2u);
+    EXPECT_EQ(sim.fills()[0].source, FillSource::SELF_TRADE);
+    EXPECT_FALSE(sim.fills()[0].maker);
+    EXPECT_EQ(sim.fills()[1].source, FillSource::SELF_TRADE);
+    EXPECT_TRUE(sim.fills()[1].maker);
+    // Bought and sold 2 at the same price: flat, no cash moved, both fees paid.
+    EXPECT_EQ(sim.position(), 0);
+    EXPECT_EQ(sim.cashTicks(), 0);
+    EXPECT_NEAR(sim.fees(), 2 * (0.003 - 0.002), 1e-12);
+    EXPECT_EQ(sim.getStats().self_trade_qty, 2);
+}
+
+TEST(Simulator, SelfTradePreventionIsOptIn) {
+    SimConfig c = config();
+    c.self_trade_prevention = true;
+    uint64_t bid = 0, sell = 0;
+    const Simulator sim = selfCross(c, bid, sell);
+
+    EXPECT_STREQ(order(sim, sell).reject_reason, "SELF_TRADE");
+    EXPECT_EQ(order(sim, bid).filled, 0);
+    EXPECT_TRUE(sim.fills().empty());
 }
 
 TEST(Simulator, CancelTravelsWithLatency) {

@@ -72,17 +72,24 @@ struct SimConfig {
     double maker_fee = 0.0;
     double taker_fee = 0.0;
     // How the strategy's passive fills affect the replayed venue orders.
-    //  false (default): no impact. A venue execution that reaches a strategy
-    //    order (queued ahead of the order it hit, or a venue add crossing it)
-    //    fills the strategy order AND still happens to the venue orders exactly
-    //    as recorded, so the venue's side of the book stays identical to Nasdaq's.
-    //  true: the execution's quantity is conserved: what the strategy received
-    //    is taken out of the venue's fill, so venue orders keep size the venue
-    //    thinks is gone. That size ends up as orphans no later record removes,
-    //    which distorts the rest of the day (measured: ~570k shares on AAPL with
-    //    the example strategy). Aggressive strategy orders always take venue
-    //    liquidity, whichever is chosen.
-    bool passive_impact = false;
+    //  true (default): the execution's quantity is conserved. What the strategy
+    //    received is taken out of the venue's fill, so the venue order behind it
+    //    keeps that size, as it would have in reality. Once the venue retires
+    //    that order, the size stays in the book as an orphan that no later record
+    //    removes (counted in SimStats; ~570k shares by the close on AAPL with the
+    //    example strategy).
+    //  false: no impact. The execution fills the strategy order AND still
+    //    happens to the venue orders exactly as recorded, so the venue's side of
+    //    the book stays identical to Nasdaq's, at the cost of counting the
+    //    execution twice.
+    // Aggressive strategy orders always take venue liquidity, whichever is chosen.
+    bool passive_impact = true;
+    // Nasdaq lets an order trade with a resting order of the same firm unless
+    // the firm opts in to self-match prevention. false (default): self-trades
+    // execute, and both sides are booked as fills (source SELF_TRADE). true:
+    // an incoming order that would cross one of the strategy's own resting
+    // orders is rejected with SELF_TRADE.
+    bool self_trade_prevention = false;
     // Equity sample spacing for the PnL curve.
     uint64_t pnl_sample_interval_ns = 1'000'000'000;   // 1 s
 };
@@ -106,6 +113,7 @@ enum class FillSource : uint8_t {
     AHEAD_IN_QUEUE, // a venue fill hit an order queued behind the strategy's
     SWEEP,          // a venue fill ran past an order the strategy had taken
     CROSSING_ADD,   // a venue add crossed the strategy's resting order
+    SELF_TRADE,     // the strategy's order traded with its own resting order (both sides)
 };
 
 const char* to_string(FillSource source);
@@ -146,6 +154,7 @@ struct SimStats {
     uint64_t orphaned_orders = 0;         // venue orders kept alive after the venue retired them
     int64_t orphaned_qty = 0;
     int64_t crossing_add_qty = 0;         // venue add quantity that traded on arrival
+    int64_t self_trade_qty = 0;           // strategy quantity that traded with itself
 };
 
 class Simulator {

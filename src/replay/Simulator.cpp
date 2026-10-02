@@ -38,6 +38,7 @@ const char* to_string(FillSource source) {
         case FillSource::AHEAD_IN_QUEUE: return "AHEAD_IN_QUEUE";
         case FillSource::SWEEP:          return "SWEEP";
         case FillSource::CROSSING_ADD:   return "CROSSING_ADD";
+        case FillSource::SELF_TRADE:     return "SELF_TRADE";
     }
     return "UNKNOWN";
 }
@@ -128,9 +129,15 @@ int Simulator::cross(OrderSide incoming, int price, int qty, StrategyOrder* aggr
     const int left = book.fillOrders(resting, price, qty, trade_scratch, 0);
     for (const TradeEvent& trade : trade_scratch) {
         const order_id_t resting_id = resting == OrderSide::BUY ? trade.buy_id : trade.sell_id;
-        if (aggressor) {
+        StrategyOrder* maker = strategyAt(resting_id);
+        if (aggressor && maker) {
+            // Allowed self-trade (self_trade_prevention is off): book both sides.
+            recordFill(*aggressor, trade.trade_qty, trade.trade_price, false, FillSource::SELF_TRADE);
+            recordFill(*maker, trade.trade_qty, trade.trade_price, true, FillSource::SELF_TRADE);
+            stats.self_trade_qty += trade.trade_qty;
+        } else if (aggressor) {
             recordFill(*aggressor, trade.trade_qty, trade.trade_price, false, FillSource::AGGRESSIVE);
-        } else if (StrategyOrder* maker = strategyAt(resting_id)) {
+        } else if (maker) {
             recordFill(*maker, trade.trade_qty, trade.trade_price, true, FillSource::CROSSING_ADD);
         }
     }
@@ -408,16 +415,19 @@ void Simulator::arriveSubmit(StrategyOrder& order) {
         finish(order, StrategyOrderStatus::REJECTED);
         return;
     }
-    // Self-trade prevention: never cross a resting order of our own.
-    for (const uint64_t id : live_ids) {
-        const StrategyOrder& other = strategy_orders.at(id);
-        if (other.status != StrategyOrderStatus::OPEN || other.side == order.side) continue;
-        const bool would_cross = order.side == OrderSide::BUY ? other.price <= order.price : other.price >= order.price;
-        if (would_cross) {
-            order.reject_reason = "SELF_TRADE";
-            stats.orders_rejected += 1;
-            finish(order, StrategyOrderStatus::REJECTED);
-            return;
+    // Opt-in self-match prevention: never cross a resting order of our own.
+    // Without it, a crossing order trades with them like with anyone else.
+    if (config.self_trade_prevention) {
+        for (const uint64_t id : live_ids) {
+            const StrategyOrder& other = strategy_orders.at(id);
+            if (other.status != StrategyOrderStatus::OPEN || other.side == order.side) continue;
+            const bool would_cross = order.side == OrderSide::BUY ? other.price <= order.price : other.price >= order.price;
+            if (would_cross) {
+                order.reject_reason = "SELF_TRADE";
+                stats.orders_rejected += 1;
+                finish(order, StrategyOrderStatus::REJECTED);
+                return;
+            }
         }
     }
 

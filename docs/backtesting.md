@@ -90,7 +90,7 @@ class JoinTheBid(Strategy):
 | `OUTSIDE_TRADING_WINDOW` | gateway, immediately | sent outside `[session]` start–end |
 | `QUANTITY_ABOVE_MAX` / `QUANTITY_BELOW_MIN` | exchange, on arrival | `[risk] max_order_qty` / `min_order_qty` |
 | `PRICE_TOO_FAR_FROM_TOP` | exchange, on arrival | more than `[risk] max_price_deviation` dollars from the same-side best price |
-| `SELF_TRADE` | exchange, on arrival | the order would trade with one of the strategy's own resting orders |
+| `SELF_TRADE` | exchange, on arrival | only with `[model] self_trade_prevention = true`: the order would trade with one of the strategy's own resting orders |
 
 ## The config file
 
@@ -103,7 +103,7 @@ class JoinTheBid(Strategy):
 | `[latency]` | `order_us` (strategy → exchange), `market_data_us` (exchange → strategy) |
 | `[risk]` | `max_position`, `max_order_qty`, `min_order_qty`, `max_price_deviation` |
 | `[fees]` | `maker`, `taker`: dollars per share, negative = rebate |
-| `[model]` | `passive_impact` (see below) |
+| `[model]` | `passive_impact`, `self_trade_prevention` (see below) |
 | `[strategy]` | `path`, optional `class`, and `[strategy.params]` passed to the constructor |
 | `[output]` | `pnl_sample_ms`, optional `fills_csv`, `equity_csv`, `orders_csv` |
 
@@ -126,19 +126,31 @@ that saw T's data `market_data_us` late would have sent them.
 | `AHEAD_IN_QUEUE` | a real execution hit an order queued *behind* the strategy's at the same price, so the real aggressor would have hit the strategy first |
 | `CROSSING_ADD` | a real order arrived at a price that crosses the strategy's resting order (typically a stale quote being picked off) |
 | `SWEEP` | a real execution ran past an order whose size the strategy had already taken |
+| `SELF_TRADE` | the strategy's order traded with one of its own resting orders; both sides are recorded (taker and maker) |
 
 **Impact on the real orders.**
 - **Aggressive orders:** when the strategy takes real liquidity, it's gone. The
   later records for those orders are reconciled against what is left:
   - a fill moves on to the next orders in the queue (`SWEEP`)
   - a cancel is clamped to what remains
-- **Passive fills:** by default (`passive_impact = false`) a passive fill leaves
-  the real orders exactly as recorded, so the replayed market stays identical to
-  Nasdaq's.
-- **`passive_impact = true`:** conserves the execution's size instead. The real
-  orders the strategy displaced keep their size, and that size remains in the
-  book after Nasdaq retires them. On the example strategy that left about 570k
-  phantom shares in AAPL's book over the day, which is why it is off by default.
+- **Passive fills:** by default (`passive_impact = true`) a passive fill comes
+  out of the real execution. The real order queued behind the strategy keeps the
+  size the strategy took, as it would have in reality.
+  - The catch: once Nasdaq retires that order, nothing in the data removes the
+    size it kept. It stays in the book as an orphan.
+  - On the example strategy that came to about 24,600 orphaned orders (568k shares)
+    on AAPL by the close. The report counts them.
+- **`passive_impact = false`:** leaves the real orders exactly as recorded, so the
+  replayed market stays identical to Nasdaq's. The strategy is filled in addition,
+  so the execution is counted twice.
+
+**Self-trades.** Nasdaq lets an order trade with a resting order from the same
+firm unless the firm opts in to self-match prevention. So by default the
+strategy's own orders trade with each other:
+- both fills are recorded, with source `SELF_TRADE`
+- the position doesn't change, and both the taker and the maker fee are paid
+
+Set `[model] self_trade_prevention = true` to reject such orders instead.
 
 **What the replay cannot know:**
 - how other traders would have reacted to the strategy's orders
@@ -159,8 +171,9 @@ arrives at its price.
 - **Fill ratio** (filled ÷ accepted quantity) and **maker share**.
 - **Filled quantity by source.**
 
-It ends with the **reconciliation counters**. With `passive_impact = false`,
-`orphaned orders` should be 0, and venue anomalies should always be 0.
+It ends with the **reconciliation counters**. Venue anomalies should always be 0.
+`orphaned orders` measures how much size passive fills have left in the book; it is
+0 with `passive_impact = false`.
 
 `--fills-csv`, `--equity-csv` and `--orders-csv` write each fill, the equity
 curve, and every order.

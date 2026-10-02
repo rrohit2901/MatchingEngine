@@ -269,7 +269,7 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
     strategy timer. At equal times the order is action, then venue, then timer.
   - Market-data latency is folded into the action delay.
   - Gateway checks: price grid, position limit, trading window.
-  - Exchange checks on arrival: `RiskManager`, and self-trade prevention.
+  - Exchange checks on arrival: `RiskManager`, plus self-trade prevention if opted in.
   - Limit orders only.
   - Fees, an equity curve, and reconciliation counters.
 - **Python** (`python/matching_engine/backtest.py`): `Strategy` (`on_start`, `on_timer`,
@@ -278,7 +278,7 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
   - `run`: TOML config plus flag overrides, `--param`, and CSV outputs.
   - `validate` (`--through-simulator`).
 - **Example:** `strategies/ob_alpha.py` and `.toml`.
-- **Tests:** 14 gtest cases (`tests/test_simulator.cpp`) and 5 pytest cases
+- **Tests:** 17 gtest cases (`tests/test_simulator.cpp`) and 5 pytest cases
   (`tests/python/test_backtest.py`).
 
 **Departures from the plan above, and why**
@@ -298,15 +298,24 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
   This reproduces the venue exactly when there is no strategy, without assuming the
   venue's matching is plain FIFO. (About 1% of fills price away from the order's
   displayed price.)
-- **Passive fills have no impact by default (`passive_impact = false`).**
-  - The first version conserved execution quantity: a fill the strategy took ahead in the
-    queue was taken out of the venue order behind it.
-  - That left venue orders holding size Nasdaq had already retired. On AAPL with OB alpha
-    that came to 24,591 orphaned orders and 568,120 phantom shares by the close.
-  - Now the venue's orders change exactly as recorded, and the strategy is filled in
-    addition. It stays available as `passive_impact = true`.
+- **Passive impact is configurable; the default is on (`passive_impact = true`), as you
+  decided.**
+  - On: what the strategy is filled passively comes out of the venue order behind it.
+    That venue order keeps size Nasdaq later retires, and that size stays as an orphan.
+    On AAPL with OB alpha that came to 24,591 orphaned orders and 568,120 shares by the
+    close. The report shows the count.
+  - Off: the venue's orders change exactly as recorded, and the strategy is filled in
+    addition.
+  - I briefly shipped "off" as the default without asking; that was reverted.
   - Aggressive strategy orders always take real liquidity, and the venue's later records
     for those orders are clamped or swept.
+- **Self-trades execute by default, as on Nasdaq; prevention is opt-in, as you decided**
+  (`self_trade_prevention = true` rejects them).
+  - When allowed, both sides are booked as `SELF_TRADE` fills: flat position, both fees
+    paid.
+  - The original plan listed self-trade prevention as always on.
+- **Limit orders only, as you decided.** An IOC flag was added without being discussed
+  and has been removed.
 - **Callbacks use a fixed timer only** (default 10 ms), as decided. Fills since the last
   call arrive in `ctx.fills`.
 
@@ -315,16 +324,20 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
   comparisons (`me-backtest validate --through-simulator`). So the reconciliation logic
   is neutral when there is nothing to reconcile.
 - **OB alpha on AAPL** (both sides, top 5 levels, $5,000 × weights 5..1, ±1,500 shares,
-  50 + 20 µs latency):
-  - PnL −$20,152, with 707k shares bought and 708k sold, all of it as maker.
-  - By source: 826k `CROSSING_ADD` (stale quotes picked off) and 590k `AHEAD_IN_QUEUE`.
-  - 6,700 `SELF_TRADE` rejects.
-  - Zero orphans, sweeps, clamped cancels and venue anomalies.
-  - 14.5 s for 2.33 M strategy calls.
-- **PnL reconciles with the fill log exactly** (TSLA: −$18,776.63 both ways), and two runs
+  50 + 20 µs latency, default model):
+  - PnL −$24,318, with 757k shares bought and 758k sold, all of it as maker.
+  - By source: 893k `CROSSING_ADD` (stale quotes picked off), 582k `AHEAD_IN_QUEUE`,
+    38k `SWEEP` and 113 `AGGRESSIVE`.
+  - Reconciliation: 24,591 orphaned orders (568,120 shares) from passive impact, 17
+    clamped cancels, 0 self-trades and 0 venue anomalies.
+  - About 17 s for 2.33 M strategy calls.
+- **With `passive_impact = false`, the same run gives** PnL −$20,152, zero orphans, and
+  6,700 orders that would have self-traded. Those were rejected at the time, because
+  prevention was still always on.
+- **PnL reconciles with the fill log exactly** (TSLA: −$22,375.46 both ways), and two runs
   give identical fills.
-- **Latency changes the outcome as expected.** On TSLA: 48,392 fills at 0 µs, 48,334 at
-  1 ms and 48,290 at 10 ms.
+- **Latency changes the outcome.** On TSLA: 52,445 fills at 0 µs, 52,481 at 1 ms and
+  52,387 at 10 ms.
 
 ### Later (out of scope)
 - Streamlit UI.

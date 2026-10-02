@@ -51,6 +51,7 @@ CONFIG_KEYS = {
     ("fees", "taker"): "taker_fee",
     ("output", "pnl_sample_ms"): "pnl_sample_ms",
     ("model", "passive_impact"): "passive_impact",
+    ("model", "self_trade_prevention"): "self_trade_prevention",
 }
 
 
@@ -110,6 +111,7 @@ def build_run(args: argparse.Namespace) -> tuple[BacktestConfig, type[Strategy],
         "date": args.date, "symbol": args.symbol, "data_dir": args.data, "start": args.start, "end": args.end,
         "timer_ms": args.timer_ms, "order_latency_us": args.order_latency_us, "md_latency_us": args.md_latency_us,
         "max_position": args.max_position, "passive_impact": args.passive_impact,
+        "self_trade_prevention": args.self_trade_prevention,
     }
     settings.update({k: v for k, v in overrides.items() if v is not None})
     if args.strategy:
@@ -173,7 +175,8 @@ def print_report(result: BacktestResult, strategy_name: str, params: dict[str, A
     c, s, st = result.config, result.summary, result.stats
     print(f"\n{strategy_name} on {c.symbol} {c.date}   window {c.start}-{c.end} ET   timer {c.timer_ms:g} ms   "
           f"latency order {c.order_latency_us:g} us + market data {c.md_latency_us:g} us   "
-          f"passive impact {'on' if c.passive_impact else 'off'}")
+          f"passive impact {'on' if c.passive_impact else 'off'}   "
+          f"self-trade prevention {'on' if c.self_trade_prevention else 'off'}")
     if params:
         print("params  " + "  ".join(f"{k}={v}" for k, v in params.items()))
 
@@ -210,7 +213,8 @@ def print_report(result: BacktestResult, strategy_name: str, params: dict[str, A
 
     print("\nreplay reconciliation (venue records vs the book the strategy changed)")
     print(f"  ahead-of-queue fills {st['ahead_fill_qty']:,}   sweeps {st['sweep_qty']:,}   "
-          f"crossing adds {st['crossing_add_qty']:,}   unfilled venue qty {st['unfilled_venue_qty']:,}")
+          f"crossing adds {st['crossing_add_qty']:,}   self-trades {st['self_trade_qty']:,}   "
+          f"unfilled venue qty {st['unfilled_venue_qty']:,}")
     print(f"  clamped cancels {st['clamped_cancels']:,}   orphaned orders {st['orphaned_orders']:,} "
           f"({st['orphaned_qty']:,} sh)   venue anomalies "
           f"{sum(st['venue'][k] for k in ('unknown_order', 'modify_unknown', 'duplicate_add', 'cancel_oversized', 'bad_side', 'bad_price', 'unknown_action')):,}")
@@ -262,7 +266,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--md-latency-us", type=float)
     run.add_argument("--max-position", type=int)
     run.add_argument("--passive-impact", action=argparse.BooleanOptionalAction, default=None,
-                     help="conserve execution quantity when the strategy is filled passively (default off)")
+                     help="take passive strategy fills out of the venue order behind (default on)")
+    run.add_argument("--self-trade-prevention", action=argparse.BooleanOptionalAction, default=None,
+                     help="reject orders that would trade with the strategy's own (default off: they execute)")
     run.add_argument("--fills-csv")
     run.add_argument("--equity-csv")
     run.add_argument("--orders-csv")

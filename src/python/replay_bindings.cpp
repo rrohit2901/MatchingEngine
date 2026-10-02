@@ -129,6 +129,7 @@ py::dict simStatsDict(const SimStats& s) {
     d["orphaned_orders"] = s.orphaned_orders;
     d["orphaned_qty"] = s.orphaned_qty;
     d["crossing_add_qty"] = s.crossing_add_qty;
+    d["self_trade_qty"] = s.self_trade_qty;
     return d;
 }
 
@@ -181,6 +182,7 @@ void bindReplay(py::module_& m) {
         .def_readwrite("maker_fee", &SimConfig::maker_fee)
         .def_readwrite("taker_fee", &SimConfig::taker_fee)
         .def_readwrite("passive_impact", &SimConfig::passive_impact)
+        .def_readwrite("self_trade_prevention", &SimConfig::self_trade_prevention)
         .def_readwrite("pnl_sample_interval_ns", &SimConfig::pnl_sample_interval_ns);
 
     py::class_<Simulator>(m, "Simulator", R"doc(
