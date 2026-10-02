@@ -57,7 +57,6 @@ def main() -> int:
         print(f"FAIL  backtest {symbol} {day}: {r.error}")
 
     short = Settings(date=day, symbol=symbol, start="09:31:00", end="09:32:00")
-    cases = [
     m = MEMORY_MB
     # (name, strategy body, limits, expected error kind, text the message must contain)
     cases = [
