@@ -362,7 +362,10 @@ class JoinTheBid(Strategy):
             ctx.buy(ctx.best_bid.price, 100)
 ```
 
-A full session (about 2.3 M strategy calls) runs in about 15 s. The guide (strategy API,
+A full session (about 2.3 M strategy calls) runs in about 15 s.
+
+There is also a web UI: `pip install '.[web]'` and `streamlit run webapp/app.py`. It has every
+setting in a sidebar, a strategy editor, and charts of the result. The guide (strategy API,
 config, the fill model and its limits) is [`docs/backtesting.md`](docs/backtesting.md);
 how it was built and validated is in [`docs/strategy-replay-plan.md`](docs/strategy-replay-plan.md).
 

@@ -180,6 +180,33 @@ It ends with the **reconciliation counters**. Venue anomalies should always be 0
 `--fills-csv`, `--equity-csv` and `--orders-csv` write each fill, the equity
 curve, and every order.
 
+For programs (the web UI uses these):
+- `--out DIR` writes `result.json` (everything in the report, plus the equity curve),
+  `fills.csv` and `orders.csv`.
+- If the run fails, `result.json` holds `{"ok": false, "error": {...}}` and the exit
+  code is 2. The error's `kind` is `config`, `strategy_load`, `strategy_init` or
+  `strategy_runtime`, and its traceback shows only the strategy's own lines.
+- `--progress FILE` keeps a small JSON file updated with how far through the trading
+  window the replay is.
+- `--quiet` drops the printed report.
+
+## Web UI
+
+```bash
+pip install '.[web]'
+streamlit run webapp/app.py          # http://localhost:8501
+```
+
+- **Sidebar:** every setting above.
+- **Main area:** the strategy's code (or upload a `.py` file) and its parameters, as
+  TOML.
+- **Run:** executes in a separate process with limits: 120 s wall time, 90 s CPU,
+  1.5 GB memory, 20 MB of output. At most 2 runs execute at once, and the rest queue.
+  Results appear on the page: metrics, equity, position and mid charts, fills by
+  source, rejects, reconciliation counters, and fills and orders with CSV download.
+- **Locally:** the runner is not a sandbox. The public deployment adds one; see
+  [`ui-plan.md`](ui-plan.md).
+
 ## Getting data
 
 ```bash
