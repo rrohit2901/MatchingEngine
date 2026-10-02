@@ -340,13 +340,12 @@ size_t Simulator::applyEvent(const MboEvents& events, size_t i) {
 
 // --- strategy ------------------------------------------------------------------
 
-uint64_t Simulator::submit(OrderSide side, int price, int quantity, bool ioc) {
+uint64_t Simulator::submit(OrderSide side, int price, int quantity) {
     StrategyOrder order{};
     order.client_id = next_client_id++;
     order.side = side;
     order.price = price;
     order.quantity = quantity;
-    order.ioc = ioc;
     order.ts_sent = clock;
     stats.orders_submitted += 1;
 
@@ -424,13 +423,10 @@ void Simulator::arriveSubmit(StrategyOrder& order) {
 
     const int left = cross(order.side, order.price, order.quantity, &order);
     if (order.status != StrategyOrderStatus::PENDING) return;   // filled in full
-    if (left > 0 && !order.ioc) {
-        order.engine_id = book.addOrder(order.price, left, OrderType::LIMIT, order.side);
-        strategy_by_engine.emplace(order.engine_id, order.client_id);
-        order.status = StrategyOrderStatus::OPEN;
-    } else {
-        finish(order, StrategyOrderStatus::CANCELLED);   // IOC remainder
-    }
+    // The rest of a limit order rests at its price.
+    order.engine_id = book.addOrder(order.price, left, OrderType::LIMIT, order.side);
+    strategy_by_engine.emplace(order.engine_id, order.client_id);
+    order.status = StrategyOrderStatus::OPEN;
 }
 
 void Simulator::arriveCancel(StrategyOrder& order) {

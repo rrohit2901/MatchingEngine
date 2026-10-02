@@ -88,7 +88,6 @@ class Order(NamedTuple):
     price: float
     quantity: int
     filled: int
-    ioc: bool
     status: str         # PENDING, OPEN, FILLED, CANCELLED or REJECTED
     reject_reason: str
     ts_sent: int
@@ -100,8 +99,8 @@ class Order(NamedTuple):
 
 
 def _order(t) -> Order:
-    client_id, side, price, quantity, filled, ioc, status, reason, sent, arrival = t
-    return Order(client_id, _side_name(side), to_dollars(price), quantity, filled, ioc, status, reason, sent, arrival)
+    client_id, side, price, quantity, filled, status, reason, sent, arrival = t
+    return Order(client_id, _side_name(side), to_dollars(price), quantity, filled, status, reason, sent, arrival)
 
 
 def _fill(t) -> Fill:
@@ -184,13 +183,14 @@ class Context:
         return _order(t) if t else None
 
     # --- actions ------------------------------------------------------------
-    def buy(self, price: float, quantity: int, ioc: bool = False) -> int:
-        """Limit buy. Returns the order id; check ctx.order(id) for its status."""
-        return self._sim.submit(OrderSide.BUY, to_ticks(price), int(quantity), ioc)
+    def buy(self, price: float, quantity: int) -> int:
+        """Limit buy: trades what it can on arrival, rests the rest. Returns the order id;
+        check ctx.order(id) for its status."""
+        return self._sim.submit(OrderSide.BUY, to_ticks(price), int(quantity))
 
-    def sell(self, price: float, quantity: int, ioc: bool = False) -> int:
+    def sell(self, price: float, quantity: int) -> int:
         """Limit sell. Returns the order id."""
-        return self._sim.submit(OrderSide.SELL, to_ticks(price), int(quantity), ioc)
+        return self._sim.submit(OrderSide.SELL, to_ticks(price), int(quantity))
 
     def cancel(self, order_id: int) -> bool:
         """Request a cancel. False if the order is unknown or already done."""

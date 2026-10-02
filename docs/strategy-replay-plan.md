@@ -270,7 +270,7 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
   - Market-data latency is folded into the action delay.
   - Gateway checks: price grid, position limit, trading window.
   - Exchange checks on arrival: `RiskManager`, and self-trade prevention.
-  - IOC orders.
+  - Limit orders only.
   - Fees, an equity curve, and reconciliation counters.
 - **Python** (`python/matching_engine/backtest.py`): `Strategy` (`on_start`, `on_timer`,
   `on_end`), `Context` (dollar prices), `BacktestConfig` and `run_backtest`.

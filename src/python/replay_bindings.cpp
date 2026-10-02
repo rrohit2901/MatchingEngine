@@ -133,7 +133,7 @@ py::dict simStatsDict(const SimStats& s) {
 }
 
 py::tuple orderTuple(const StrategyOrder& o) {
-    return py::make_tuple(o.client_id, o.side, o.price, o.quantity, o.filled, o.ioc,
+    return py::make_tuple(o.client_id, o.side, o.price, o.quantity, o.filled,
                           to_string(o.status), o.reject_reason, o.ts_sent, o.ts_arrival);
 }
 
@@ -192,7 +192,8 @@ class. Prices here are int ticks of 1e-4 $, times are UTC nanoseconds.
         .def(py::init<SimConfig>(), py::arg("config"))
         .def("run", &runSimulator, py::arg("mbo"), py::arg("on_timer"),
              "Replay the MBO columns, calling on_timer() every timer interval in the trading window.")
-        .def("submit", &Simulator::submit, py::arg("side"), py::arg("price"), py::arg("quantity"), py::arg("ioc") = false)
+        .def("submit", &Simulator::submit, py::arg("side"), py::arg("price"), py::arg("quantity"),
+             "Limit order; returns its client id. It reaches the exchange after the latency.")
         .def("cancel", &Simulator::cancel, py::arg("client_id"))
         .def("cancel_all", &Simulator::cancelAll)
         .def_property_readonly("now", &Simulator::now)
@@ -222,7 +223,7 @@ class. Prices here are int ticks of 1e-4 $, times are UTC nanoseconds.
                  if (it == s.orders().end()) return py::none();
                  return orderTuple(it->second);
              }, py::arg("client_id"),
-             "(client_id, side, price, quantity, filled, ioc, status, reject_reason, ts_sent, ts_arrival).")
+             "(client_id, side, price, quantity, filled, status, reject_reason, ts_sent, ts_arrival).")
         .def("orders", [](const Simulator& s, bool live_only) {
                  py::list out;
                  if (live_only) {

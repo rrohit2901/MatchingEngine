@@ -93,7 +93,6 @@ struct StrategyOrder {
     int price;
     int quantity;
     int filled = 0;
-    bool ioc = false;
     StrategyOrderStatus status = StrategyOrderStatus::PENDING;
     const char* reject_reason = "";
     uint64_t ts_sent = 0;
@@ -167,7 +166,8 @@ class Simulator {
         // --- strategy actions (from the timer callback) ----------------------
         // Returns the client order id. The order reaches the venue after the
         // configured latency; until then its status is PENDING.
-        uint64_t submit(OrderSide side, int price, int quantity, bool ioc = false);
+        // A limit order: whatever does not trade on arrival rests until filled or cancelled.
+        uint64_t submit(OrderSide side, int price, int quantity);
         // Requests a cancel; it also travels with the latency. Returns false if
         // the order is unknown or already done.
         bool cancel(uint64_t client_id);

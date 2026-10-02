@@ -198,11 +198,31 @@ TEST(Simulator, LatencyDecidesWhetherTheOrderMakesIt) {
         SimConfig c = config();
         c.order_latency_ns = latency;
         uint64_t id = 0;
-        const Simulator sim = runWith(tape, c, 100, [&](Simulator& s) { id = s.submit(OrderSide::BUY, P, 5, /*ioc=*/true); });
+        const Simulator sim = runWith(tape, c, 100, [&](Simulator& s) { id = s.submit(OrderSide::BUY, P, 5); });
         return order(sim, id).filled;
     };
     EXPECT_EQ(taken(0), 5);      // arrives at 100, before the venue execution
-    EXPECT_EQ(taken(100), 0);    // arrives at 200: nothing left to take
+    EXPECT_EQ(taken(100), 0);    // arrives at 200: nothing left to take, so it just rests
+}
+
+TEST(Simulator, LimitOrderRestsWhatItCannotFill) {
+    Tape tape;
+    tape.rec(10, 'A', 'A', P, 3, 1).rec(1'000, 'N', 'N', 0, 0, 0);
+    uint64_t id = 0;
+    StrategyOrderStatus after_arrival{};
+    int resting = 0;
+    Simulator sim(config());
+    sim.run(tape.events(), [&](Simulator& s) {
+        if (s.now() == 100) id = s.submit(OrderSide::BUY, P, 5);
+        if (s.now() == 200) {
+            after_arrival = s.orders().at(id).status;
+            resting = restingAt(s, OrderSide::BUY, P);
+        }
+    });
+    EXPECT_EQ(after_arrival, StrategyOrderStatus::OPEN);
+    EXPECT_EQ(order(sim, id).filled, 3);   // took the whole offer...
+    EXPECT_EQ(resting, 2);                 // ...and rested the other 2 as the best bid
+    EXPECT_EQ(order(sim, id).status, StrategyOrderStatus::CANCELLED);   // at the end of trading
 }
 
 TEST(Simulator, MarketDataLatencyAlsoDelaysTheOrder) {
@@ -211,7 +231,7 @@ TEST(Simulator, MarketDataLatencyAlsoDelaysTheOrder) {
     SimConfig c = config();
     c.md_latency_ns = 100;
     uint64_t id = 0;
-    const Simulator sim = runWith(tape, c, 100, [&](Simulator& s) { id = s.submit(OrderSide::BUY, P, 5, true); });
+    const Simulator sim = runWith(tape, c, 100, [&](Simulator& s) { id = s.submit(OrderSide::BUY, P, 5); });
     EXPECT_EQ(order(sim, id).filled, 0);
     EXPECT_EQ(order(sim, id).ts_arrival, 200u);
 }
@@ -281,7 +301,7 @@ TEST(Simulator, TradingWindowAndMarkToMarket) {
     Simulator sim(c);
     sim.run(tape.events(), [&](Simulator& s) {
         seen.push_back(s.now());
-        if (seen.size() == 1) s.submit(OrderSide::BUY, P + CENT, 4, true);   // lift the offer
+        if (seen.size() == 1) s.submit(OrderSide::BUY, P + CENT, 4);   // lift the offer
     });
     EXPECT_EQ(seen, (std::vector<uint64_t>{2'000, 3'000}));
     EXPECT_EQ(sim.position(), 4);

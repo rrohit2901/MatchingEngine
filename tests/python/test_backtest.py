@@ -46,7 +46,7 @@ class LiftOnce(Strategy):
         if not getattr(self, "done", False):
             self.done = True
             ask = ctx.best_ask
-            self.order_id = ctx.buy(ask.price, 30, ioc=True)
+            self.order_id = ctx.buy(ask.price, 30)
 
 
 def test_aggressive_order_fills_and_pnl_marks_at_mid():
@@ -99,7 +99,7 @@ def test_cli_runs_a_strategy_file_with_overrides(tmp_path, capsys):
             def on_timer(self, ctx):
                 if not self.sent:
                     self.sent = True
-                    ctx.buy(ctx.best_ask.price, self.qty, ioc=True)
+                    ctx.buy(ctx.best_ask.price, self.qty)
     """))
     (tmp_path / "bt.toml").write_text(textwrap.dedent(f"""
         [data]

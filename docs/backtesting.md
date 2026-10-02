@@ -68,14 +68,14 @@ class JoinTheBid(Strategy):
 | `ctx.fills` | `Fill`s since the previous callback |
 | `ctx.open_orders` | `Order`s that are `PENDING` (in flight) or `OPEN`, oldest first |
 | `ctx.order(id)` | one `Order`, any status |
-| `ctx.buy(price, qty, ioc=False)` / `ctx.sell(...)` | limit order; returns its id |
+| `ctx.buy(price, qty)` / `ctx.sell(price, qty)` | limit order: trades what it can on arrival, rests the rest; returns its id |
 | `ctx.cancel(id)` / `ctx.cancel_all()` | cancel requests; they travel with latency too |
 
 - **Prices** are dollars on the one-cent grid. An off-grid price is rejected
   (`PRICE_INCREMENT`), never rounded.
 - **The book** includes the strategy's own resting orders, as a real feed would
   show them.
-- **`Order`** has `order_id, side, price, quantity, filled, remaining, ioc,
+- **`Order`** has `order_id, side, price, quantity, filled, remaining,
   status, reject_reason, ts_sent, ts_arrival`. The statuses are `PENDING`,
   `OPEN`, `FILLED`, `CANCELLED` and `REJECTED`.
 - **`Fill`** has `ts, order_id, side, price, quantity, maker, source`. `source`

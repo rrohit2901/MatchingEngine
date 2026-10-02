@@ -161,10 +161,10 @@ def write_outputs(result: BacktestResult, output: dict[str, Any]) -> None:
     if output.get("orders_csv"):
         with open(output["orders_csv"], "w", newline="") as fh:
             writer = csv.writer(fh)
-            writer.writerow(["order_id", "side", "price", "quantity", "filled", "ioc", "status", "reject_reason",
+            writer.writerow(["order_id", "side", "price", "quantity", "filled", "status", "reject_reason",
                              "sent_ny", "arrival_ny"])
             for o in result.orders:
-                writer.writerow([o.order_id, o.side, f"{o.price:.4f}", o.quantity, o.filled, int(o.ioc), o.status,
+                writer.writerow([o.order_id, o.side, f"{o.price:.4f}", o.quantity, o.filled, o.status,
                                  o.reject_reason, _ny(o.ts_sent), _ny(o.ts_arrival) if o.ts_arrival else ""])
         print(f"orders  -> {output['orders_csv']}")
 
