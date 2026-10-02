@@ -24,9 +24,10 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # -----------------------------------------------------------------------------
-# Build options. Every default reproduces the historical build exactly, so
+# Build options. With the defaults,
 #   cmake -S . -B build && cmake --build build && ctest --test-dir build
-# is unaffected by their existence. The wheel build (scikit-build-core, see
+# builds and tests everything except the Python extension. ME_LTO changes how
+# Release code is optimized, not what is built. The wheel build (scikit-build-core, see
 # pyproject.toml) turns tests/bench/apps off and python on, so `pip install .`
 # never clones googletest or benchmark.
 # -----------------------------------------------------------------------------
@@ -35,6 +36,7 @@ option(ME_BUILD_BENCH  "Build the Google Benchmark suites"                ON)
 option(ME_BUILD_APPS   "Build the me_main demo executable"                ON)
 option(ME_BUILD_PYTHON "Build the pybind11 extension module"              OFF)
 option(ME_NATIVE_ARCH  "Tune Release builds for this CPU (-march=native)" ON)
+option(ME_LTO          "Link-time optimization for Release builds"        ON)
 
 # -----------------------------------------------------------------------------
 # Warning flags applied via an interface target (modern pattern)
@@ -59,6 +61,29 @@ target_compile_options(project_options INTERFACE
     $<$<CONFIG:Release>:-O3 $<$<BOOL:${ME_NATIVE_ARCH}>:-march=native> -DNDEBUG>
     $<$<CONFIG:Debug>:-O0 -g3 -fno-omit-frame-pointer>
 )
+
+# Link-time optimization, Release only. The order path is split across
+# OrderManager.cpp, BookLevel.cpp and OrderBook.cpp, and MatchingEngine.h is a
+# template instantiated in whichever TU uses it, so without LTO every getView /
+# resolve / valid on that path is an out-of-line call the compiler cannot see
+# through. Measured with bench_latency against the non-LTO build in
+# docs/optimization#4.md: Engine add, modify and cancel P50 roughly halve, and
+# OrderBook modify and cancel drop by 20-50% depending on the session.
+#
+# Set before FetchContent so every target, dependencies included, is built the
+# same way; that is the configuration the numbers above were taken with. Debug
+# is left alone: LTO slows the link and makes stepping through code harder for
+# no benefit there. check_ipo_supported turns it off quietly on a toolchain that
+# cannot do it rather than failing the configure.
+if(ME_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT ME_LTO_SUPPORTED OUTPUT ME_LTO_ERROR LANGUAGES CXX)
+    if(ME_LTO_SUPPORTED)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    else()
+        message(STATUS "ME_LTO: toolchain cannot do LTO, building without it (${ME_LTO_ERROR})")
+    endif()
+endif()
  
 # -----------------------------------------------------------------------------
 # Dependencies via FetchContent (no system installs required)

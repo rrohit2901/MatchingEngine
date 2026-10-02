@@ -158,3 +158,56 @@ TEST_F(MatcherTest, MatchAgainstUnknownOrderIsANoOp) {
     EXPECT_FALSE(matcher.tryMatch(9999));
     EXPECT_TRUE(drainTrades().empty());
 }
+
+// --- Fast path and the reused trade buffer --------------------------------
+// tryMatch returns early when the opposite best does not cross, skips rewriting
+// the incoming order when nothing filled, and keeps its trade vector across
+// calls. These pin down that none of that changes what is observable.
+
+TEST_F(MatcherTest, NoMatchAgainstAnEmptyOppositeSide) {
+    const order_id_t buy_id = order_book->addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
+
+    EXPECT_FALSE(matcher.tryMatch(buy_id));
+    EXPECT_EQ(order_book->getOrderQuantity(buy_id), 10);
+    EXPECT_TRUE(drainTrades().empty());
+}
+
+TEST_F(MatcherTest, PriceExactlyAtOppositeBestCrosses) {
+    // The early exit must use the same inclusive rule as fillOrders on both
+    // sides; an off-by-one here would silently stop at-the-touch orders filling.
+    const order_id_t sell_id = order_book->addOrder(100, 4, OrderType::LIMIT, OrderSide::SELL);
+    const order_id_t buy_id = order_book->addOrder(100, 4, OrderType::LIMIT, OrderSide::BUY);
+    EXPECT_TRUE(matcher.tryMatch(buy_id));
+    EXPECT_TRUE(IsGone(*order_book, sell_id));
+
+    const order_id_t bid_id = order_book->addOrder(90, 4, OrderType::LIMIT, OrderSide::BUY);
+    const order_id_t ask_id = order_book->addOrder(90, 4, OrderType::LIMIT, OrderSide::SELL);
+    EXPECT_TRUE(matcher.tryMatch(ask_id));
+    EXPECT_TRUE(IsGone(*order_book, bid_id));
+
+    EXPECT_EQ(drainTrades().size(), 2u);
+}
+
+TEST_F(MatcherTest, TradesFromAnEarlierMatchAreNotPublishedAgain) {
+    // First sweep: two resting sells, one incoming buy takes both.
+    order_book->addOrder(100, 3, OrderType::LIMIT, OrderSide::SELL);
+    order_book->addOrder(101, 3, OrderType::LIMIT, OrderSide::SELL);
+    const order_id_t first = order_book->addOrder(101, 6, OrderType::LIMIT, OrderSide::BUY);
+    EXPECT_TRUE(matcher.tryMatch(first));
+    EXPECT_EQ(drainTrades().size(), 2u);
+
+    // A passive order in between takes the early exit and must publish nothing.
+    const order_id_t passive = order_book->addOrder(90, 1, OrderType::LIMIT, OrderSide::BUY);
+    EXPECT_FALSE(matcher.tryMatch(passive));
+    EXPECT_TRUE(drainTrades().empty());
+
+    // Second sweep reuses the buffer: exactly its own single trade comes out.
+    const order_id_t sell_id = order_book->addOrder(102, 2, OrderType::LIMIT, OrderSide::SELL);
+    const order_id_t second = order_book->addOrder(102, 2, OrderType::LIMIT, OrderSide::BUY);
+    EXPECT_TRUE(matcher.tryMatch(second));
+    const auto trades = drainTrades();
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].buy_id, second);
+    EXPECT_EQ(trades[0].sell_id, sell_id);
+    EXPECT_EQ(trades[0].trade_qty, 2);
+}
