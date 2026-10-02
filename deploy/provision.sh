@@ -6,6 +6,8 @@
 set -euo pipefail
 
 ISOLATE_REF="${ISOLATE_REF:-v2.7}"     # https://github.com/ioi/isolate
+# Public name for HTTPS, e.g. 52-65-150-242.sslip.io. Empty: no Caddy (SSH tunnel only).
+SITE_ADDRESS="${SITE_ADDRESS:-}"
 SWAP_GB="${SWAP_GB:-2}"
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -68,6 +70,26 @@ if [ -f "$(dirname "$0")/systemd/me-web.service" ]; then
     install -m 644 "$(dirname "$0")/systemd/me-web.service" /etc/systemd/system/me-web.service
     systemctl daemon-reload
     systemctl enable me-web.service   # started once a release is installed (install-from-source.sh)
+fi
+
+if [ -n "$SITE_ADDRESS" ]; then
+    log "Caddy: HTTPS for ${SITE_ADDRESS}"
+    if ! command -v caddy >/dev/null; then
+        apt-get install -yq debian-keyring debian-archive-keyring apt-transport-https gnupg
+        curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+            | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+            > /etc/apt/sources.list.d/caddy-stable.list
+        apt-get update -q
+        apt-get install -yq caddy
+    fi
+    sed "s|^SITE_ADDRESS {|${SITE_ADDRESS} {|" "$(dirname "$0")/Caddyfile" > /etc/caddy/Caddyfile
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+    # validate runs as root and opens the access log; the service runs as caddy.
+    install -d -o caddy -g caddy -m 750 /var/log/caddy
+    chown -R caddy:caddy /var/log/caddy
+    systemctl enable caddy
+    systemctl reload caddy || systemctl restart caddy
 fi
 
 log "isolate environment check (report only)"

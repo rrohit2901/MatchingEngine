@@ -1,0 +1,28 @@
+# HTTPS front for the web UI. deploy/provision.sh fills in SITE_ADDRESS
+# (e.g. 52-65-150-242.sslip.io); Caddy gets and renews the Let's Encrypt
+# certificate itself and redirects http:// to https://.
+SITE_ADDRESS {
+	encode zstd gzip
+
+	# Streamlit, bound to localhost only. Its websocket is proxied as-is.
+	reverse_proxy 127.0.0.1:8501
+
+	# Strategy uploads are at most 100 KB; nothing legitimate is bigger.
+	request_body {
+		max_size 1MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
