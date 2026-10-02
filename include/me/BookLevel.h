@@ -18,7 +18,9 @@ class BookLevel {
     private:
         int total_quantity;
         int price;
-        // Live ids in FIFO (= ascending id) order, interleaved with dead ones.
+        // Live ids in FIFO (arrival) order, interleaved with dead ones. Ids are
+        // not ascending — OrderManager recycles slots — so position is the only
+        // record of time priority.
         // Entries before `head` were consumed by fills; dead entries at or after
         // `head` are cancelled / modified-to-zero orders, skipped lazily. Neither
         // path erases from the vector, so no hot-path op shifts or allocates.

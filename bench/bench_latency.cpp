@@ -117,7 +117,7 @@ Stats measureAdd(int n) {
         }
         const double price = kBasePrice + (i++ % kPriceLevels);
         const auto t0 = Clock::now();
-        const int id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        const order_id_t id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         const auto t1 = Clock::now();
         g_sink = id;
         s.push_back(nanos(t0, t1));
@@ -136,12 +136,12 @@ Stats measureCancel(int n) {
     s.reserve(static_cast<std::size_t>(n));
     int i = 0;
     for (int w = 0; w < kWarmup; ++w) {
-        const int id = book.addOrder(kBasePrice + kBookLevels + (i++ % kBookLevels), kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        const order_id_t id = book.addOrder(kBasePrice + kBookLevels + (i++ % kBookLevels), kQuantity, OrderType::LIMIT, OrderSide::BUY);
         g_sink = book.cancelOrder(id);
     }
     for (int k = 0; k < n; ++k) {
         const double price = kBasePrice + kBookLevels + (i++ % kBookLevels);
-        const int id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);  // untimed setup
+        const order_id_t id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);  // untimed setup
         const auto t0 = Clock::now();
         const bool ok = book.cancelOrder(id);
         const auto t1 = Clock::now();
@@ -159,13 +159,13 @@ Stats measureModify(int n) {
     s.reserve(static_cast<std::size_t>(n));
     int i = 0;
     for (int w = 0; w < kWarmup; ++w) {
-        const int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        const order_id_t id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         const auto modified = book.modifyOrder(id, kQuantity + 1, kBasePrice + 1 + (i++ % kPriceLevels), OrderSide::BUY, OrderType::LIMIT);
         g_sink = modified.has_value();
         book.cancelOrder(modified.value_or(id));
     }
     for (int k = 0; k < n; ++k) {
-        const int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);  // untimed setup
+        const order_id_t id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);  // untimed setup
         const int newPrice = kBasePrice + 1 + (i++ % kPriceLevels);
         const auto t0 = Clock::now();
         const auto modified = book.modifyOrder(id, kQuantity + 1, newPrice, OrderSide::BUY, OrderType::LIMIT);
@@ -193,8 +193,8 @@ Stats measureModify(int n) {
 // Both are strictly SPSC here: every push (engine events, the engine's
 // SESSION_OPEN/CLOSE, and the sentinel below) happens on this thread, and the
 // worker below is the only consumer.
-// Capacity sweep. Sizes are EventVariant slots (40 B each), so 128 = 5 KiB
-// ... 65536 = 2.5 MiB, the last of which is past L2 on most desktop parts.
+// Capacity sweep. Sizes are EventVariant slots (48 B each), so 128 = 6 KiB
+// ... 65536 = 3 MiB, the last of which is past L2 on most desktop parts.
 //
 // Result, so nobody re-runs this expecting a knee: capacity makes no measurable
 // difference here. Across repeated runs the spread between 128 and 65536 stays

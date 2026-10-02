@@ -28,7 +28,7 @@ void BM_Modify_QuantityOnly(benchmark::State& state) {
     int newQty = kQuantity;
     for (auto _ : state) {
         state.PauseTiming();
-        int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        order_id_t id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         state.ResumeTiming();
 
         // Same price/side as the resting order; only quantity differs.
@@ -48,7 +48,7 @@ void BM_Modify_ChangePriceLevel(benchmark::State& state) {
     OrderBook book;
     for (auto _ : state) {
         state.PauseTiming();
-        int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        order_id_t id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         state.ResumeTiming();
 
         auto modified = book.modifyOrder(id, kQuantity, kAltPrice, OrderSide::BUY, OrderType::LIMIT);
@@ -69,7 +69,7 @@ void BM_Modify_ChangeSide(benchmark::State& state) {
     OrderBook book;
     for (auto _ : state) {
         state.PauseTiming();
-        int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        order_id_t id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         state.ResumeTiming();
 
         auto modified = book.modifyOrder(id, kQuantity, kAltPrice, OrderSide::SELL, OrderType::LIMIT);

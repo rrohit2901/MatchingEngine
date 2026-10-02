@@ -8,8 +8,9 @@
 // The queue that carries events from the matching thread to the logger thread.
 //
 // This is the one place the capacity is chosen. Slots hold an EventVariant by
-// value (40 bytes) rather than the unique_ptr<Event> they used to, so 128 slots
-// is 5 KiB instead of 1 KiB -- still comfortably inside a 32 KiB L1d, and now the
+// value (48 bytes since order ids widened to 64 bits) rather than the
+// unique_ptr<Event> they used to, so 128 slots is 6 KiB instead of 1 KiB -- still
+// comfortably inside a 32 KiB L1d, and now the
 // ring really is the whole event, not 128 pointers to scattered heap blocks.
 //
 // The capacity stayed at 128 through that change on purpose: it is sized by the

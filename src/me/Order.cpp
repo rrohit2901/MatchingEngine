@@ -1,14 +1,19 @@
 #include "Order.h"
 
-Order::Order(order_id_t orderId, OrderSide side, OrderType type, int price, int quantity)
-    : view{orderId, side, type, price, quantity}, isCancelled(false), isFulfilled(false) {}
+Order::Order(order_id_t order_id, OrderSide order_side, OrderType order_type, int order_price, int order_quantity)
+    : orderId(order_id), price(order_price), quantity(order_quantity), side(order_side), type(order_type),
+      isCancelled(false), isFulfilled(false) {}
 
 Order::~Order() = default;
 Order::Order(const Order& other)= default;
 Order& Order::operator=(const Order& other) = default;
 
 Order::Order(Order&& other) noexcept {
-    view = other.view;
+    orderId = other.orderId;
+    price = other.price;
+    quantity = other.quantity;
+    side = other.side;
+    type = other.type;
     isCancelled = other.isCancelled;
     isFulfilled = other.isFulfilled;
 
@@ -18,7 +23,11 @@ Order::Order(Order&& other) noexcept {
 
 Order& Order::operator=(Order&& other) noexcept {
     if (this != &other) {
-        view = other.view;
+        orderId = other.orderId;
+        price = other.price;
+        quantity = other.quantity;
+        side = other.side;
+        type = other.type;
         isCancelled = other.isCancelled;
         isFulfilled = other.isFulfilled;
 
@@ -29,27 +38,27 @@ Order& Order::operator=(Order&& other) noexcept {
 }
 
 OrderView Order::getView() const {
-    return view;
+    return {orderId, side, type, price, quantity};
 }
 
 OrderSide Order::getSide() const {
-    return view.side;
+    return side;
 }
 
 OrderType Order::getType() const {
-    return view.type;
+    return type;
 }
 
 int Order::getPrice() const {
-    return view.price;
+    return price;
 }
 
 int Order::getQuantity() const {
-    return view.quantity;
+    return quantity;
 }
 
 order_id_t Order::getOrderId() const {
-    return view.orderId;
+    return orderId;
 }
 
 bool Order::valid() const {
@@ -68,12 +77,12 @@ int Order::fulfill(int qty) {
     if (!valid()) [[unlikely]] {
         return qty;
     }
-    if(qty>=view.quantity) {
-        qty -= view.quantity;
+    if(qty>=quantity) {
+        qty -= quantity;
         isFulfilled = true;
         return qty;
     }
-    view.quantity -= qty;
+    quantity -= qty;
     return 0;
 }
 
@@ -81,9 +90,9 @@ bool Order::modify(int newQuantity, int newPrice) {
     if (!valid()) {
         return false;
     }
-    view.quantity = newQuantity;
-    view.price = newPrice;
-    if(view.quantity==0) {
+    quantity = newQuantity;
+    price = newPrice;
+    if(quantity==0) {
         isFulfilled = true;
     }
     return true;

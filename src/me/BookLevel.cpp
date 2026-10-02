@@ -1,11 +1,17 @@
 #include "BookLevel.h"
 #include "Order.h"
 
+// 2 KB of ids per level. This was 512 ids when order_id_t was 32 bits; it was
+// halved when ids widened to 64 so the per-level footprint stayed the same —
+// bench_add's NewPriceLevel, which opens a level per order, doubled its RSS and
+// slowed down accordingly at 512.
+static constexpr size_t kReservedOrdersPerLevel = 256;
+
 BookLevel::BookLevel() : total_quantity(0), price(0), live_orders(0), head(0) {
-    orders.reserve(512);
+    orders.reserve(kReservedOrdersPerLevel);
 }
 BookLevel::BookLevel(std::shared_ptr<OrderManager>& order_manager, int price) : total_quantity(0), price(price), live_orders(0), head(0), order_manager(order_manager) {
-    orders.reserve(512);
+    orders.reserve(kReservedOrdersPerLevel);
 }
 
 BookLevel::~BookLevel() = default;

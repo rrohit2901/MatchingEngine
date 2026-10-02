@@ -75,8 +75,8 @@ std::optional<order_id_t> MatchingEngine<InputCont, T>::addOrder(int price, int 
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
 bool MatchingEngine<InputCont, T>::cancelOrder(order_id_t orderId) {
-    // The side has to be read before the cancel: a cancelled order is erased
-    // from the OrderManager, so afterwards there is nothing left to ask.
+    // The side has to be read before the cancel: a cancelled order's slot is
+    // released by the OrderManager, so afterwards there is nothing left to ask.
     const auto order = order_book->getOrderView(orderId);
 
     bool is_cancelled = order_book->cancelOrder(orderId);
