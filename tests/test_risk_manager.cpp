@@ -84,7 +84,7 @@ TEST(RiskManager, RejectsPriceTooFarBelowTop) {
 
 TEST(RiskManager, RealisticPriceDoesNotOverflow) {
     RiskManager risk{defaults()};
-    // LOBSTER prices are dollars x 10,000, so a live AAPL price is ~5.8e6.
+    // Replay prices are ticks of 1e-4 dollars, so a live AAPL price is ~5.8e6.
     // Comparing against top * threshold would overflow int here.
     const int top = 5853300;
     EXPECT_EQ(risk.checkOrder(top + 500, 10, top), RejectReason::NONE);

@@ -15,6 +15,8 @@ classifiers = [
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+# scripts/fetch_databento.py, convert_mbo.py and inspect_mbo.py
+data = ["databento>=0.40", "pyarrow>=14", "numpy"]
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"

@@ -239,7 +239,7 @@ python/matching_engine/  Python package
 tests/                   8 GoogleTest suites
 tests/python/            pytest suite for the bindings
 bench/                   Google Benchmark suites + latency harness
-scripts/                 LOBSTER data preparation
+scripts/                 Databento market data download, conversion, inspection
 ```
 
 Build options — all default to the historical build, so a plain configure is unchanged:
@@ -257,9 +257,26 @@ dependency.
 
 Requires CMake 3.20+, a C++20 compiler (tested on g++ 11.4), and Python 3.9+ for the bindings.
 
+## Market data
+
+Replay data is one trading day of Nasdaq TotalView-ITCH order-level events (`XNAS.ITCH`,
+MBO schema) from [Databento](https://databento.com), plus Nasdaq's own top of book
+(`mbp-1`) to validate the rebuilt book. It is downloaded once and kept under `data/`,
+which is git-ignored.
+
+```bash
+pip install '.[data]'
+export DATABENTO_API_KEY=...
+python3 scripts/fetch_databento.py --date 2026-09-29          # quotes the cost, asks before downloading
+python3 scripts/convert_mbo.py --date 2026-09-29              # raw DBN -> Parquet, prices in 1e-4 $ ticks
+python3 scripts/inspect_mbo.py --date 2026-09-29 --symbol AAPL  # checks the MBO semantics the replay relies on
+```
+
+The full replay and backtesting plan is in [`docs/strategy-replay-plan.md`](docs/strategy-replay-plan.md).
+
 ## Next
 
-- A C++ feed handler replaying LOBSTER market data through the engine.
-- A Python alpha simulator on top of it.
+- A C++ replay of the Databento MBO data through the engine.
+- A Python strategy backtester and CLI on top of it.
 - Moving the Python binding off `LockQueue`, which needs the SPSC contract argued for a
   facade whose engine can be driven from different OS threads across calls.
