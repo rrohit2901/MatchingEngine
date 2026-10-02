@@ -120,6 +120,21 @@ target_link_libraries(me_core PRIVATE project_warnings project_options)
 set_target_properties(me_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # -----------------------------------------------------------------------------
+# Market data replay: rebuilds the venue's book from Databento MBO records
+# (scripts/convert_mbo.py) and validates it against mbp-1. It reads spans the
+# caller owns, so it has no file or Arrow dependency.
+# -----------------------------------------------------------------------------
+add_library(me_replay
+    src/replay/MarketReplayer.cpp
+    src/replay/ReplayValidator.cpp
+    src/replay/Simulator.cpp
+)
+target_include_directories(me_replay PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/replay)
+target_link_libraries(me_replay PUBLIC me_core PRIVATE project_warnings project_options)
+# Linked into the Python extension, like me_core.
+set_target_properties(me_replay PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# -----------------------------------------------------------------------------
 # Main executable
 # -----------------------------------------------------------------------------
 if(ME_BUILD_APPS)

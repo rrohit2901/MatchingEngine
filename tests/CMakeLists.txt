@@ -76,3 +76,21 @@ target_link_libraries(test_risk_manager PRIVATE
     project_options
 )
 add_test(NAME risk_manager_tests COMMAND test_risk_manager)
+
+add_executable(test_market_replayer test_market_replayer.cpp)
+target_link_libraries(test_market_replayer PRIVATE
+    me_replay
+    GTest::gtest_main
+    project_warnings
+    project_options
+)
+add_test(NAME market_replayer_tests COMMAND test_market_replayer)
+
+add_executable(test_simulator test_simulator.cpp)
+target_link_libraries(test_simulator PRIVATE
+    me_replay
+    GTest::gtest_main
+    project_warnings
+    project_options
+)
+add_test(NAME simulator_tests COMMAND test_simulator)

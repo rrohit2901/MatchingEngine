@@ -37,6 +37,9 @@
 
 namespace py = pybind11;
 
+// src/python/replay_bindings.cpp
+void bindReplay(py::module_& m);
+
 namespace {
 
 using EventQueue  = LockQueue<EventVariant>;
@@ -382,4 +385,7 @@ fork() -- and will raise if you try.
     // capsule's destructor runs at module teardown. Without it the process would
     // exit without joining the logger thread, losing the tail of the log.
     m.add_object("_close_all_at_exit", py::capsule([] { PyMatchingEngine::closeAll(); }));
+
+    // After OrderSide and RiskParams, which the replay's signatures use.
+    bindReplay(m);
 }

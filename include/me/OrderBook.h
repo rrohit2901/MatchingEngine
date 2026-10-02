@@ -33,6 +33,11 @@ class OrderBook {
         std::optional<OrderView> getOrderView(order_id_t order_id) const;
 
         std::optional<int> getBestPrice(OrderSide side) const;
+        // Best level on one side, or nullopt when that side is empty. No allocation.
+        std::optional<LevelView> getTopLevel(OrderSide side) const;
+        // Order ids resting at one price, front of the queue first. May contain
+        // dead ids; valid only until the book next changes.
+        std::span<const order_id_t> getLevelQueue(OrderSide side, int price) const;
 
         std::optional<OrderSide> getOrderSide(order_id_t order_id) const;
         std::optional<OrderType> getOrderType(order_id_t order_id) const;

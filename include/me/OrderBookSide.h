@@ -170,4 +170,17 @@ class OrderBookSide {
             if (levels.empty()) return std::nullopt;
             return levels.back().getPrice();
         }
+
+        // Time-priority queue at `price` (see BookLevel::queue); empty if no level.
+        std::span<const order_id_t> getLevelQueue(int price) const {
+            const auto it = lowerBound(levels, price);
+            if (it == levels.end() || it->getPrice() != price) return {};
+            return it->queue();
+        }
+
+        // Best level's price and size, without building a view vector.
+        std::optional<LevelView> getTopLevel() const {
+            if (levels.empty()) return std::nullopt;
+            return levels.back().getView();
+        }
 };
