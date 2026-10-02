@@ -18,8 +18,13 @@ import ast
 import csv
 import importlib.util
 import inspect
+import json
+import os
+import resource
 import sys
-from dataclasses import fields
+import time
+import traceback
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -63,13 +68,20 @@ def _parse_value(text: str) -> Any:
         return text
 
 
+class StrategyLoadError(Exception):
+    """The strategy file failed to import; __cause__ is what it raised."""
+
+
 def load_strategy_class(path: Path, class_name: str | None) -> type[Strategy]:
     spec = importlib.util.spec_from_file_location(f"_strategy_{path.stem}", path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"cannot import strategy file {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise StrategyLoadError(str(path)) from exc
 
     candidates = {
         name: obj for name, obj in vars(module).items()
@@ -146,21 +158,23 @@ def _ny(ts: int) -> str:
     return datetime.fromtimestamp(ts / 1e9, tz=timezone.utc).astimezone(NEW_YORK).strftime("%H:%M:%S.%f")
 
 
-def write_outputs(result: BacktestResult, output: dict[str, Any]) -> None:
+def write_outputs(result: BacktestResult, output: dict[str, Any], announce: bool = True) -> None:
     if output.get("fills_csv"):
         with open(output["fills_csv"], "w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["time_ny", "ts_ns", "order_id", "side", "price", "quantity", "maker", "source"])
             for f in result.fills:
                 writer.writerow([_ny(f.ts), f.ts, f.order_id, f.side, f"{f.price:.4f}", f.quantity, int(f.maker), f.source])
-        print(f"fills   -> {output['fills_csv']}")
+        if announce:
+            print(f"fills   -> {output['fills_csv']}")
     if output.get("equity_csv"):
         with open(output["equity_csv"], "w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["time_ny", "ts_ns", "position", "cash", "mid", "equity"])
             for ts, position, cash, mid, equity in result.equity:
                 writer.writerow([_ny(ts), ts, position, f"{cash:.4f}", "" if mid is None else f"{mid:.4f}", f"{equity:.4f}"])
-        print(f"equity  -> {output['equity_csv']}")
+        if announce:
+            print(f"equity  -> {output['equity_csv']}")
     if output.get("orders_csv"):
         with open(output["orders_csv"], "w", newline="") as fh:
             writer = csv.writer(fh)
@@ -169,7 +183,78 @@ def write_outputs(result: BacktestResult, output: dict[str, Any]) -> None:
             for o in result.orders:
                 writer.writerow([o.order_id, o.side, f"{o.price:.4f}", o.quantity, o.filled, o.status,
                                  o.reject_reason, _ny(o.ts_sent), _ny(o.ts_arrival) if o.ts_arrival else ""])
-        print(f"orders  -> {output['orders_csv']}")
+        if announce:
+            print(f"orders  -> {output['orders_csv']}")
+
+
+def reject_counts(result: BacktestResult) -> dict[str, int]:
+    reasons: dict[str, int] = {}
+    for o in result.orders:
+        if o.status == "REJECTED":
+            reasons[o.reject_reason] = reasons.get(o.reject_reason, 0) + 1
+    return dict(sorted(reasons.items()))
+
+
+def filled_by_source(result: BacktestResult) -> dict[str, int]:
+    sources: dict[str, int] = {}
+    for f in result.fills:
+        sources[f.source] = sources.get(f.source, 0) + f.quantity
+    return dict(sorted(sources.items()))
+
+
+VENUE_ANOMALIES = ("unknown_order", "modify_unknown", "duplicate_add", "cancel_oversized",
+                   "bad_side", "bad_price", "unknown_action")
+
+
+def result_payload(result: BacktestResult, strategy_name: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Everything the report shows, as JSON-ready data (written as result.json by --out)."""
+    config = asdict(result.config)
+    config["data_dir"] = str(config["data_dir"])
+    return {
+        "ok": True,
+        "strategy": {"name": strategy_name, "params": params},
+        "config": config,
+        "summary": result.summary,
+        "rejects": reject_counts(result),
+        "filled_by_source": filled_by_source(result),
+        "stats": result.stats,
+        "venue_anomalies": sum(result.stats["venue"][k] for k in VENUE_ANOMALIES),
+        "timings": result.timings,
+        "peak_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024,
+        # (ts_ns, position, cash $, mid $ or null, equity $)
+        "equity": [list(row) for row in result.equity],
+    }
+
+
+def error_payload(kind: str, exc: BaseException, strategy_path: Path | None) -> dict[str, Any]:
+    """A failure the UI can show: what went wrong, located in the strategy's own code.
+
+    `kind` is config, strategy_load, strategy_init or strategy_runtime. The
+    traceback keeps only frames from the strategy file, so the reader is not
+    walked through the backtester's internals; if there are none (the error
+    surfaced inside the library), the last frame is kept instead.
+    """
+    message = f"{type(exc).__name__}: {exc}" if kind != "config" else str(exc)
+    location = None
+    if isinstance(exc, SyntaxError) and exc.lineno:
+        location = {"line": exc.lineno, "text": (exc.text or "").rstrip()}
+    frames = traceback.extract_tb(exc.__traceback__)
+    if strategy_path is not None:
+        own = [f for f in frames if Path(f.filename).resolve() == strategy_path.resolve()]
+    else:
+        own = []
+    shown = own or frames[-1:]
+    lines = [f"line {f.lineno}, in {f.name}: {(f.line or '').strip()}" for f in shown]
+    if shown and location is None and own:
+        location = {"line": own[-1].lineno, "text": (own[-1].line or "").strip()}
+    return {"ok": False, "error": {"kind": kind, "message": message, "location": location,
+                                   "traceback": lines if kind != "config" else []}}
+
+
+def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, allow_nan=False, default=str))
+    os.replace(tmp, path)
 
 
 def print_report(result: BacktestResult, strategy_name: str, params: dict[str, Any]) -> None:
@@ -200,17 +285,11 @@ def print_report(result: BacktestResult, strategy_name: str, params: dict[str, A
         print(f"  {name:<{width}}  {value}")
 
     if s["rejected"]:
-        reasons: dict[str, int] = {}
-        for o in result.orders:
-            if o.status == "REJECTED":
-                reasons[o.reject_reason] = reasons.get(o.reject_reason, 0) + 1
-        print("  rejects  " + "  ".join(f"{k}={v:,}" for k, v in sorted(reasons.items())))
+        print("  rejects  " + "  ".join(f"{k}={v:,}" for k, v in reject_counts(result).items()))
 
-    sources: dict[str, int] = {}
-    for f in result.fills:
-        sources[f.source] = sources.get(f.source, 0) + f.quantity
+    sources = filled_by_source(result)
     if sources:
-        print("  filled qty by source  " + "  ".join(f"{k}={v:,}" for k, v in sorted(sources.items())))
+        print("  filled qty by source  " + "  ".join(f"{k}={v:,}" for k, v in sources.items()))
 
     print("\nreplay reconciliation (venue records vs the book the strategy changed)")
     print(f"  ahead-of-queue fills {st['ahead_fill_qty']:,}   sweeps {st['sweep_qty']:,}   "
@@ -218,18 +297,76 @@ def print_report(result: BacktestResult, strategy_name: str, params: dict[str, A
           f"unfilled venue qty {st['unfilled_venue_qty']:,}")
     print(f"  clamped cancels {st['clamped_cancels']:,}   orphaned orders {st['orphaned_orders']:,} "
           f"({st['orphaned_qty']:,} sh)   venue anomalies "
-          f"{sum(st['venue'][k] for k in ('unknown_order', 'modify_unknown', 'duplicate_add', 'cancel_oversized', 'bad_side', 'bad_price', 'unknown_action')):,}")
+          f"{sum(st['venue'][k] for k in VENUE_ANOMALIES):,}")
     t = result.timings
     print(f"\n{st['venue']['records']:,} venue records, {st['timer_calls']:,} strategy calls   "
           f"load {t.get('load_s', 0):.1f}s   replay {t.get('replay_s', 0):.1f}s")
 
 
+def _strategy_path(args: argparse.Namespace) -> Path | None:
+    if args.strategy:
+        return Path(args.strategy)
+    if args.config:
+        try:
+            with open(args.config, "rb") as fh:
+                path = tomllib.load(fh).get("strategy", {}).get("path")
+            return Path(path) if path else None
+        except (OSError, tomllib.TOMLDecodeError):
+            return None
+    return None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    config, strategy_cls, params, output = build_run(args)
-    strategy = strategy_cls(**params)
-    result = run_backtest(strategy, config)
-    print_report(result, strategy_cls.__name__, params)
-    write_outputs(result, output)
+    out = Path(args.out) if args.out else None
+    if out is not None:
+        out.mkdir(parents=True, exist_ok=True)
+    strategy_path = _strategy_path(args)
+
+    def fail(kind: str, exc: BaseException) -> int:
+        payload = error_payload(kind, exc, strategy_path)
+        if out is not None:
+            _write_json_atomic(out / "result.json", payload)
+        err = payload["error"]
+        print(f"error ({err['kind']}): {err['message']}", file=sys.stderr)
+        for line in err["traceback"]:
+            print(f"  {line}", file=sys.stderr)
+        return 2
+
+    # Each phase fails differently: a bad config, a strategy file that does not
+    # import, a constructor that rejects its parameters, or code that raises
+    # while running.
+    try:
+        config, strategy_cls, params, output = build_run(args)
+        config.sim_config()   # validates times and limits before anything runs
+    except StrategyLoadError as exc:
+        return fail("strategy_load", exc.__cause__ or exc)
+    except (SystemExit, Exception) as exc:   # bad TOML, missing keys, bad values
+        return fail("config", exc)
+    try:
+        strategy = strategy_cls(**params)
+    except Exception as exc:
+        return fail("strategy_init", exc)
+
+    on_progress = None
+    if args.progress:
+        progress_path = Path(args.progress)
+        started = time.monotonic()
+
+        def on_progress(fraction: float) -> None:
+            _write_json_atomic(progress_path, {"fraction": round(fraction, 4),
+                                               "elapsed_s": round(time.monotonic() - started, 2)})
+    try:
+        result = run_backtest(strategy, config, on_progress=on_progress)
+    except Exception as exc:
+        return fail("strategy_runtime", exc)
+
+    if not args.quiet:
+        print_report(result, strategy_cls.__name__, params)
+    if out is not None:
+        output = {**output, "fills_csv": out / "fills.csv", "orders_csv": out / "orders.csv"}
+    write_outputs(result, output, announce=not args.quiet)
+    if out is not None:
+        _write_json_atomic(out / "result.json", result_payload(result, strategy_cls.__name__, params))
     return 0
 
 
@@ -274,6 +411,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--fills-csv")
     run.add_argument("--equity-csv")
     run.add_argument("--orders-csv")
+    run.add_argument("--out", help="write result.json, fills.csv and orders.csv into this directory "
+                                   "(on failure, result.json holds the error)")
+    run.add_argument("--progress", help="keep this JSON file updated with how far the replay is (0-1)")
+    run.add_argument("--quiet", action="store_true", help="do not print the report")
     run.set_defaults(func=cmd_run)
 
     validate = sub.add_parser("validate", help="check the replay rebuilds Nasdaq's book exactly")
