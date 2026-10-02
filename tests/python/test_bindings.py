@@ -34,7 +34,6 @@ def test_add_order_returns_id_and_rests_in_book(log_path):
         assert len(levels) == 1
         assert levels[0].price == 1005
         assert levels[0].quantity == 10
-        assert levels[0].order_ids == [order_id]
 
 
 def test_crossing_order_trades_and_empties_the_book(log_path):

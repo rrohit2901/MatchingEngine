@@ -21,9 +21,9 @@ class MatchingEngine {
         MatchingEngine(const MatchingEngine&) = delete;
         MatchingEngine& operator=(const MatchingEngine&) = delete;
 
-        std::vector<std::shared_ptr<BookLevel>> getBuySideView(int numLevels = 1) const;
-        std::vector<std::shared_ptr<BookLevel>> getSellSideView(int numLevels = 1) const;
-        std::pair<std::vector<std::shared_ptr<BookLevel>>, std::vector<std::shared_ptr<BookLevel>>> getOrderBookView(int numLevels = 1) const;
+        std::vector<LevelView> getBuySideView(int numLevels = 1) const;
+        std::vector<LevelView> getSellSideView(int numLevels = 1) const;
+        std::pair<std::vector<LevelView>, std::vector<LevelView>> getOrderBookView(int numLevels = 1) const;
 
         std::optional<order_id_t> addOrder(int price, int quantity, OrderType type, OrderSide side);
         bool cancelOrder(order_id_t orderId);
@@ -51,9 +51,7 @@ MatchingEngine<InputCont, T>::~MatchingEngine() {
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
 std::optional<order_id_t> MatchingEngine<InputCont, T>::addOrder(int price, int quantity, OrderType type, OrderSide side) {
-    const auto book_top = side==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
-    std::optional<int> top_book_price = std::nullopt;
-    if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
+    std::optional<int> top_book_price = order_book->getBestPrice(side);
 
     if (const RejectReason reason = risk_manager.checkOrder(price, quantity, top_book_price);
         reason != RejectReason::NONE) {
@@ -77,8 +75,8 @@ std::optional<order_id_t> MatchingEngine<InputCont, T>::addOrder(int price, int 
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
 bool MatchingEngine<InputCont, T>::cancelOrder(order_id_t orderId) {
-    // The side has to be read before the cancel: a cancelled order is erased
-    // from the OrderManager, so afterwards there is nothing left to ask.
+    // The side has to be read before the cancel: a cancelled order's slot is
+    // released by the OrderManager, so afterwards there is nothing left to ask.
     const auto order = order_book->getOrderView(orderId);
 
     bool is_cancelled = order_book->cancelOrder(orderId);
@@ -92,9 +90,7 @@ template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
 std::optional<order_id_t> MatchingEngine<InputCont, T>::modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type) {
     // The modified order is checked against the side and price it is moving TO.
-    const auto book_top = newSide==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
-    std::optional<int> top_book_price = std::nullopt;
-    if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
+    std::optional<int> top_book_price = order_book->getBestPrice(newSide);
 
     if (const RejectReason reason = risk_manager.checkOrder(newPrice, newQuantity, top_book_price);
         reason != RejectReason::NONE) {
@@ -120,18 +116,18 @@ std::optional<order_id_t> MatchingEngine<InputCont, T>::modifyOrder(order_id_t o
 
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
-std::vector<std::shared_ptr<BookLevel>> MatchingEngine<InputCont, T>::getBuySideView(int numLevels) const {
+std::vector<LevelView> MatchingEngine<InputCont, T>::getBuySideView(int numLevels) const {
     return order_book->getBuySideView(numLevels);
 }
 
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
-std::vector<std::shared_ptr<BookLevel>> MatchingEngine<InputCont, T>::getSellSideView(int numLevels) const {
+std::vector<LevelView> MatchingEngine<InputCont, T>::getSellSideView(int numLevels) const {
     return order_book->getSellSideView(numLevels);
 }
 
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
-std::pair<std::vector<std::shared_ptr<BookLevel>>, std::vector<std::shared_ptr<BookLevel>>> MatchingEngine<InputCont, T>::getOrderBookView(int numLevels) const {
+std::pair<std::vector<LevelView>, std::vector<LevelView>> MatchingEngine<InputCont, T>::getOrderBookView(int numLevels) const {
     return {order_book->getBuySideView(numLevels), order_book->getSellSideView(numLevels)};
 }

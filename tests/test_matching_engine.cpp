@@ -17,23 +17,15 @@
 
 namespace {
 
-using Levels = std::vector<std::shared_ptr<BookLevel>>;
+using Levels = std::vector<LevelView>;
 using EventQueue = LockQueue<EventVariant>;
 
 int restingQuantity(const Levels& levels) {
     int total = 0;
     for (const auto& level : levels) {
-        total += level->getTotalQuantity();
+        total += level.quantity;
     }
     return total;
-}
-
-std::size_t restingOrders(const Levels& levels) {
-    std::size_t count = 0;
-    for (const auto& level : levels) {
-        count += level->getOrders().size();
-    }
-    return count;
 }
 
 class MatchingEngineTest : public ::testing::Test {
@@ -89,24 +81,24 @@ TEST_F(MatchingEngineTest, NonCrossingOrdersRest) {
 
     const auto bids = me.getBuySideView(5);
     ASSERT_EQ(bids.size(), 1u);
-    EXPECT_EQ(bids.front()->getPrice(), 100);
-    EXPECT_EQ(bids.front()->getTotalQuantity(), 10);
+    EXPECT_EQ(bids.front().price, 100);
+    EXPECT_EQ(bids.front().quantity, 10);
 
     const auto asks = me.getSellSideView(5);
     ASSERT_EQ(asks.size(), 1u);
-    EXPECT_EQ(asks.front()->getPrice(), 101);
-    EXPECT_EQ(asks.front()->getTotalQuantity(), 5);
+    EXPECT_EQ(asks.front().price, 101);
+    EXPECT_EQ(asks.front().quantity, 5);
 }
 
 TEST_F(MatchingEngineTest, CrossingOrderTradesOnArrival) {
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::SELL);
     me.addOrder(100, 10, OrderType::LIMIT, OrderSide::BUY);
 
-    // Both sides are fully consumed, so no quantity and no live order remains.
+    // Both sides are fully consumed, so no quantity and no level remains.
     EXPECT_EQ(restingQuantity(me.getBuySideView(5)), 0);
     EXPECT_EQ(restingQuantity(me.getSellSideView(5)), 0);
-    EXPECT_EQ(restingOrders(me.getBuySideView(5)), 0u);
-    EXPECT_EQ(restingOrders(me.getSellSideView(5)), 0u);
+    EXPECT_TRUE(me.getBuySideView(5).empty());
+    EXPECT_TRUE(me.getSellSideView(5).empty());
 }
 
 TEST_F(MatchingEngineTest, PartialFillLeavesRemainderResting) {
@@ -116,7 +108,7 @@ TEST_F(MatchingEngineTest, PartialFillLeavesRemainderResting) {
     // The 4-lot ask is consumed; 6 of the buy's 10 stay on the bid at 100.
     EXPECT_EQ(restingQuantity(me.getSellSideView(5)), 0);
     EXPECT_EQ(restingQuantity(me.getBuySideView(5)), 6);
-    EXPECT_EQ(restingOrders(me.getBuySideView(5)), 1u);
+    EXPECT_EQ(me.getBuySideView(5).size(), 1u);
 }
 
 TEST_F(MatchingEngineTest, RestingOrderAbsorbsSmallerAggressor) {
@@ -157,7 +149,7 @@ TEST_F(MatchingEngineTest, AggressorSweepsBestPriceFirst) {
     const auto asks = me.getSellSideView(5);
     EXPECT_EQ(restingQuantity(asks), 5);
     ASSERT_FALSE(asks.empty());
-    EXPECT_EQ(asks.back()->getPrice(), 102);
+    EXPECT_EQ(asks.back().price, 102);
 }
 
 TEST_F(MatchingEngineTest, AggressorSweepsMultipleLevels) {
@@ -190,8 +182,8 @@ TEST_F(MatchingEngineTest, ModifyOrderRequotesToNewPrice) {
 
     const auto bids = me.getBuySideView(5);
     ASSERT_EQ(bids.size(), 1u);
-    EXPECT_EQ(bids.front()->getPrice(), 99);
-    EXPECT_EQ(bids.front()->getTotalQuantity(), 10);
+    EXPECT_EQ(bids.front().price, 99);
+    EXPECT_EQ(bids.front().quantity, 10);
 }
 
 TEST_F(MatchingEngineTest, ModifyUnknownOrderReturnsNullopt) {
@@ -221,12 +213,12 @@ TEST_F(MatchingEngineTest, BookViewIsPriceOrderedAndCapped) {
     const auto [bids, asks] = me.getOrderBookView(3);
     ASSERT_EQ(bids.size(), 3u);
     ASSERT_EQ(asks.size(), 3u);
-    EXPECT_EQ(bids[0]->getPrice(), 100); // best bid is the highest
-    EXPECT_EQ(bids[1]->getPrice(), 99);
-    EXPECT_EQ(bids[2]->getPrice(), 98);
-    EXPECT_EQ(asks[0]->getPrice(), 101); // best ask is the lowest
-    EXPECT_EQ(asks[1]->getPrice(), 102);
-    EXPECT_EQ(asks[2]->getPrice(), 103);
+    EXPECT_EQ(bids[0].price, 100); // best bid is the highest
+    EXPECT_EQ(bids[1].price, 99);
+    EXPECT_EQ(bids[2].price, 98);
+    EXPECT_EQ(asks[0].price, 101); // best ask is the lowest
+    EXPECT_EQ(asks[1].price, 102);
+    EXPECT_EQ(asks[2].price, 103);
 
     EXPECT_EQ(me.getBuySideView(2).size(), 2u);
     EXPECT_EQ(me.getSellSideView(1).size(), 1u);
@@ -403,7 +395,7 @@ TEST_F(MatchingEngineTest, RejectedModifyLeavesOrderUntouched) {
 
     const auto bids = me.getBuySideView(5);
     ASSERT_EQ(bids.size(), 1u);
-    EXPECT_EQ(bids.front()->getTotalQuantity(), 10); // unchanged
+    EXPECT_EQ(bids.front().quantity, 10); // unchanged
 }
 
 TEST_F(MatchingEngineTest, CustomRiskParamsAreApplied) {

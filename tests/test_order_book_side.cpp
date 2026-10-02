@@ -60,8 +60,8 @@ TEST_F(OrderBookSideTest, AddTwoOrdersAtSamePriceShareOneLevel) {
 
     const auto levels = buy.getLevels();
     ASSERT_EQ(levels.size(), 1u);
-    EXPECT_EQ(levels.front()->getPrice(), 100);
-    EXPECT_EQ(levels.front()->getTotalQuantity(), 15);
+    EXPECT_EQ(levels.front().price, 100);
+    EXPECT_EQ(levels.front().quantity, 15);
 }
 
 TEST_F(OrderBookSideTest, IsOrderIdExistRejectsOtherSide) {
@@ -93,7 +93,7 @@ TEST_F(OrderBookSideTest, CancelOrderKeepsLevelWithRemainingQuantity) {
 
     const auto levels = buy.getLevels();
     ASSERT_EQ(levels.size(), 1u);
-    EXPECT_EQ(levels.front()->getTotalQuantity(), 5);
+    EXPECT_EQ(levels.front().quantity, 5);
 }
 
 TEST_F(OrderBookSideTest, CancelUnknownOrderFails) {
@@ -124,7 +124,7 @@ TEST_F(OrderBookSideTest, ModifyOrderNewPriceMovesLevel) {
 
     const auto levels = buy.getLevels();
     ASSERT_EQ(levels.size(), 1u); // old level emptied and dropped
-    EXPECT_EQ(levels.front()->getPrice(), 101);
+    EXPECT_EQ(levels.front().price, 101);
     EXPECT_EQ(order_manager->getView(modified).value().quantity, 50);
 }
 
@@ -141,9 +141,9 @@ TEST_F(OrderBookSideTest, BuyLevelsSortHighestFirst) {
 
     const auto view = buy.getBookSideView(3);
     ASSERT_EQ(view.size(), 3u);
-    EXPECT_EQ(view[0]->getPrice(), 102); // best bid first
-    EXPECT_EQ(view[1]->getPrice(), 101);
-    EXPECT_EQ(view[2]->getPrice(), 100);
+    EXPECT_EQ(view[0].price, 102); // best bid first
+    EXPECT_EQ(view[1].price, 101);
+    EXPECT_EQ(view[2].price, 100);
 }
 
 TEST_F(OrderBookSideTest, SellLevelsSortLowestFirst) {
@@ -154,9 +154,9 @@ TEST_F(OrderBookSideTest, SellLevelsSortLowestFirst) {
 
     const auto view = sell.getBookSideView(3);
     ASSERT_EQ(view.size(), 3u);
-    EXPECT_EQ(view[0]->getPrice(), 100); // best ask first
-    EXPECT_EQ(view[1]->getPrice(), 101);
-    EXPECT_EQ(view[2]->getPrice(), 102);
+    EXPECT_EQ(view[0].price, 100); // best ask first
+    EXPECT_EQ(view[1].price, 101);
+    EXPECT_EQ(view[2].price, 102);
 }
 
 TEST_F(OrderBookSideTest, BookSideViewRespectsLevelCap) {

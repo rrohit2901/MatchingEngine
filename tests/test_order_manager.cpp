@@ -3,15 +3,16 @@
 #include <gtest/gtest.h>
 
 #include <set>
+#include <vector>
 
 // OrderManager is the single owner of every Order. Everything above it holds
 // order ids and asks the manager for state, so the contract under test is:
-//   - ids are unique and never reused;
+//   - ids are unique and never reused, even though the slots behind them are;
 //   - an order that is cancelled, fully filled, or modified to zero quantity is
-//     ERASED, after which getView() reports nullopt rather than stale data;
-//   - operations on an unknown or dead id fail instead of throwing.
+//     RELEASED, after which getView() reports nullopt rather than stale data;
+//   - operations on an unknown, dead, or stale id fail instead of throwing.
 //
-// State is read through getView(), which costs one hash lookup for all fields.
+// State is read through getView(), which costs one slab index for all fields.
 
 TEST(OrderManager, AddOrderExposesItsFields) {
     OrderManager manager;
@@ -48,8 +49,8 @@ TEST(OrderManager, AddOrderIssuesUniqueIds) {
         ids.insert(manager.add_order(OrderSide::SELL, OrderType::LIMIT, 1, 100));
     }
     EXPECT_EQ(ids.size(), 100u);
-    // Ids start at 1, so 0 stays free as a not-found sentinel.
-    EXPECT_EQ(*ids.begin(), 1u);
+    // 0 is never minted, so it stays free as a not-found sentinel.
+    EXPECT_EQ(ids.count(0), 0u);
 }
 
 TEST(OrderManager, IdsAreNotReusedAfterCancel) {
@@ -109,7 +110,7 @@ TEST(OrderManager, ModifyToZeroQuantityRetiresAndErasesOrder) {
 
     EXPECT_TRUE(manager.modify_order(id, 0, 100));
     // A zero-quantity order counts as fulfilled, so it stops being valid AND is
-    // dropped from the map — the same treatment cancel and fulfill give.
+    // its slot released — the same treatment cancel and fulfill give.
     EXPECT_FALSE(manager.valid(id));
     EXPECT_FALSE(manager.getView(id).has_value());
     // Erased, not merely tombstoned: a second modify finds nothing to act on.
@@ -182,4 +183,88 @@ TEST(OrderManager, OrdersAreIndependent) {
     EXPECT_EQ(view->side, OrderSide::SELL);
     EXPECT_EQ(view->quantity, 5);
     EXPECT_EQ(view->price, 101);
+}
+
+// --- Slab behaviour ---------------------------------------------------------
+// Ids are (generation << 32 | slot index). The tests below pin down the parts of
+// that scheme callers rely on without depending on the exact bit layout.
+
+TEST(OrderManager, FreedSlotIsReusedUnderAFreshId) {
+    OrderManager manager(1);
+    const order_id_t first = manager.add_order(OrderSide::BUY, OrderType::LIMIT, 10, 100);
+    ASSERT_TRUE(manager.cancel_order(first));
+
+    // Capacity 1 and nothing live: the only way to place this order without
+    // growing is to reuse the freed slot.
+    const order_id_t second = manager.add_order(OrderSide::SELL, OrderType::LIMIT, 7, 101);
+    EXPECT_EQ(manager.capacity(), 1u);
+    EXPECT_NE(second, first);
+}
+
+TEST(OrderManager, StaleIdCannotTouchTheOrderNowInItsSlot) {
+    OrderManager manager(1);
+    const order_id_t stale = manager.add_order(OrderSide::BUY, OrderType::LIMIT, 10, 100);
+    ASSERT_TRUE(manager.cancel_order(stale));
+    const order_id_t fresh = manager.add_order(OrderSide::SELL, OrderType::LIMIT, 7, 101);
+
+    // Every operation through the stale id must miss, and leave the new
+    // occupant of the slot untouched.
+    EXPECT_FALSE(manager.valid(stale));
+    EXPECT_FALSE(manager.getView(stale).has_value());
+    EXPECT_FALSE(manager.cancel_order(stale));
+    EXPECT_FALSE(manager.modify_order(stale, 1, 99));
+    EXPECT_EQ(manager.fulfill_order(stale, 3), 3);
+
+    const auto view = manager.getView(fresh);
+    ASSERT_TRUE(view.has_value());
+    EXPECT_EQ(view->orderId, fresh);
+    EXPECT_EQ(view->side, OrderSide::SELL);
+    EXPECT_EQ(view->quantity, 7);
+    EXPECT_EQ(view->price, 101);
+}
+
+TEST(OrderManager, IdsStayUniqueUnderHeavySlotReuse) {
+    OrderManager manager(4);
+    std::set<order_id_t> ids;
+    // Cycle the same few slots many times over; every id handed out must be new.
+    for (int i = 0; i < 1000; ++i) {
+        const order_id_t id = manager.add_order(OrderSide::BUY, OrderType::LIMIT, 1, 100);
+        EXPECT_TRUE(ids.insert(id).second) << "id " << id << " reissued";
+        ASSERT_EQ(manager.fulfill_order(id, 1), 0);
+    }
+    EXPECT_EQ(manager.capacity(), 4u);
+}
+
+TEST(OrderManager, IdOfANeverUsedSlotIsUnknown) {
+    OrderManager manager(8);
+    const order_id_t id = manager.add_order(OrderSide::BUY, OrderType::LIMIT, 10, 100);
+
+    // Same generation, neighbouring slot that was never allocated.
+    EXPECT_FALSE(manager.valid(id + 1));
+    // Even generations mark free slots; no id built from one may resolve.
+    EXPECT_FALSE(manager.valid(id & 0xFFFF'FFFFu));
+    EXPECT_FALSE(manager.valid(0));
+}
+
+TEST(OrderManager, GrowingPastCapacityKeepsExistingOrders) {
+    OrderManager manager(2);
+    std::vector<order_id_t> ids;
+    for (int i = 0; i < 50; ++i) {
+        ids.push_back(manager.add_order(OrderSide::BUY, OrderType::LIMIT, i + 1, 100 + i));
+    }
+    EXPECT_GE(manager.capacity(), 50u);
+
+    // Every order placed before (and across) each doubling is still intact.
+    for (int i = 0; i < 50; ++i) {
+        const auto view = manager.getView(ids[static_cast<size_t>(i)]);
+        ASSERT_TRUE(view.has_value()) << "order " << i << " lost in growth";
+        EXPECT_EQ(view->quantity, i + 1);
+        EXPECT_EQ(view->price, 100 + i);
+    }
+}
+
+TEST(OrderManager, ZeroCapacityStillAcceptsOrders) {
+    OrderManager manager(0);
+    const order_id_t id = manager.add_order(OrderSide::BUY, OrderType::LIMIT, 10, 100);
+    EXPECT_TRUE(manager.valid(id));
 }

@@ -200,7 +200,9 @@ static_assert(std::is_trivially_copyable_v<EventVariant>,
               "events by value, and a non-trivial alternative (a virtual, a "
               "std::string, any owning member) turns every slot write into a "
               "move-assign and puts allocation back on the matching thread");
-static_assert(sizeof(EventVariant) <= 40,
+// 48, up from 40, when order_id_t widened to 64 bits to carry OrderManager's
+// slot generation: OrderModified holds two ids and sets the high-water mark.
+static_assert(sizeof(EventVariant) <= 48,
               "EventVariant got fatter -- check what was added and re-check the "
               "ring buffer's footprint in event_handler/EventQueue.h");
 
