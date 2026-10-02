@@ -8,6 +8,8 @@ set -euo pipefail
 ISOLATE_REF="${ISOLATE_REF:-v2.7}"     # https://github.com/ioi/isolate
 # Public name for HTTPS, e.g. 52-65-150-242.sslip.io. Empty: no Caddy (SSH tunnel only).
 SITE_ADDRESS="${SITE_ADDRESS:-}"
+# Public key for CI deploys (one line). Empty: leave me-deploy's key as it is.
+DEPLOY_PUBKEY="${DEPLOY_PUBKEY:-}"
 SWAP_GB="${SWAP_GB:-2}"
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -70,6 +72,34 @@ if [ -f "$(dirname "$0")/systemd/me-web.service" ]; then
     install -m 644 "$(dirname "$0")/systemd/me-web.service" /etc/systemd/system/me-web.service
     systemctl daemon-reload
     systemctl enable me-web.service   # started once a release is installed (install-from-source.sh)
+fi
+
+log "Release installer and the CI deploy user"
+HERE="$(dirname "$0")"
+install -m 755 "$HERE/install-release.sh" /usr/local/sbin/me-install-release
+install -m 755 "$HERE/me-deploy-receive" /usr/local/sbin/me-deploy-receive
+install -m 755 "$HERE/me-deploy-entry" /usr/local/bin/me-deploy-entry
+id me-deploy >/dev/null 2>&1 || useradd --create-home --shell /bin/sh me-deploy
+passwd -l me-deploy >/dev/null   # no password: key only
+# One sudo rule, checked before it is installed (a broken sudoers file locks out sudo).
+visudo -cf "$HERE/sudoers.me-deploy"
+install -m 440 "$HERE/sudoers.me-deploy" /etc/sudoers.d/me-deploy
+if [ -n "$DEPLOY_PUBKEY" ]; then
+    install -d -o me-deploy -g me-deploy -m 700 /home/me-deploy/.ssh
+    # restrict: no pty, no forwarding; command=: the key can only run me-deploy-entry.
+    printf 'restrict,command="/usr/local/bin/me-deploy-entry" %s\n' "$DEPLOY_PUBKEY" \
+        > /home/me-deploy/.ssh/authorized_keys
+    chown me-deploy:me-deploy /home/me-deploy/.ssh/authorized_keys
+    chmod 600 /home/me-deploy/.ssh/authorized_keys
+fi
+# SSH hardening, checked with sshd -t before it takes effect.
+install -m 644 "$HERE/sshd.me.conf" /etc/ssh/sshd_config.d/90-me.conf
+if sshd -t; then
+    systemctl reload ssh || systemctl restart ssh
+else
+    rm -f /etc/ssh/sshd_config.d/90-me.conf
+    echo "sshd config rejected; removed it" >&2
+    exit 1
 fi
 
 if [ -n "$SITE_ADDRESS" ]; then

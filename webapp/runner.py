@@ -301,15 +301,18 @@ class IsolateBackend:
     Inside the box: the system's /usr and /lib (read-only), the virtualenv (read-only),
     the data at /data (read-only) and a private /box working directory.
 
-    Box ids come from a pool of `boxes` (one per concurrent run)."""
+    Box ids come from a pool of `boxes` (one per concurrent run), starting at
+    `first_box`. Anything else using isolate on the same machine (the post-deploy
+    check) must use other ids: initialising a box wipes whatever is in it."""
 
-    def __init__(self, boxes: int, data_dir: Path, isolate: str = "isolate", venv: Optional[Path] = None):
+    def __init__(self, boxes: int, data_dir: Path, isolate: str = "isolate", venv: Optional[Path] = None,
+                 first_box: int = 0):
         self.data_dir = Path(data_dir).resolve()   # mounted read-only at /data
         self.isolate = isolate
         # Resolved: /opt/me/current is a symlink, and the box must mount the real release.
         self.venv = Path(venv or sys.prefix).resolve()
         self._free: "queue.Queue[int]" = queue.Queue()
-        for box in range(boxes):
+        for box in range(first_box, first_box + boxes):
             self._free.put(box)
 
     def visible_data_dir(self, data_dir: Path) -> str:

@@ -1,0 +1,22 @@
+#!/bin/bash
+# Run as root (me-deploy's one sudo rule) by me-deploy-entry. Reads the release
+# bundle from stdin: a tar holding source.tar.gz and one wheel, as built by
+# .github/workflows/deploy.yml. Installs it with the root-owned
+# /usr/local/sbin/me-install-release, never with anything from the bundle.
+set -euo pipefail
+SHA="$1"
+[[ "$SHA" =~ ^[0-9a-f]{7,40}$ ]] || { echo "bad sha" >&2; exit 2; }
+MAX_BYTES=$((300 * 1024 * 1024))
+
+work="$(mktemp -d /var/tmp/me-deploy.XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+head -c "$MAX_BYTES" > "$work/bundle.tar"
+mkdir "$work/x"
+# GNU tar strips leading "/" and refuses ".." members; ownership comes from root.
+tar -xf "$work/bundle.tar" -C "$work/x" --no-same-owner --no-same-permissions
+[ -f "$work/x/source.tar.gz" ] || { echo "bundle has no source.tar.gz" >&2; exit 2; }
+shopt -s nullglob
+wheels=("$work"/x/*.whl)
+[ "${#wheels[@]}" -eq 1 ] || { echo "bundle must hold exactly one wheel" >&2; exit 2; }
+
+/usr/local/sbin/me-install-release "${SHA:0:12}" "$work/x/source.tar.gz" "${wheels[0]}"

@@ -27,8 +27,12 @@ DATA = Path(os.environ.get("ME_DATA_DIR", "/srv/me/data"))
 MEMORY_MB = int(os.environ.get("ME_MEMORY_MB", "1024"))
 
 
+CHECK_BOX = 900   # the live app uses boxes from 0; never touch those
+
+
 def runner(limits: Limits) -> Runner:
-    return Runner(DATA, backend=IsolateBackend(boxes=1, data_dir=DATA), limits=limits, max_concurrent=1)
+    return Runner(DATA, backend=IsolateBackend(boxes=1, data_dir=DATA, first_box=CHECK_BOX), limits=limits,
+                  max_concurrent=1)
 
 
 def strategy(body: str) -> str:

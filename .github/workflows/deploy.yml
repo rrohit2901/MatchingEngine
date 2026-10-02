@@ -1,0 +1,118 @@
+name: Deploy
+
+# Ships main to the backtester VM (docs/ui-plan.md, U4b): after CI passes on main,
+# or by hand. Builds the wheel on an ARM runner (the VM is a Graviton t4g), tests
+# it, and sends source + wheel to the VM, whose root-owned installer checks the
+# new release in the isolate sandbox before switching to it, health-checks it
+# after, and rolls back on failure.
+#
+# Secrets (environment "production", deployable from main only):
+#   DEPLOY_SSH_KEY      private key for me-deploy (forced command: deploy only)
+#   DEPLOY_HOST         the VM's address
+#   DEPLOY_KNOWN_HOSTS  the VM's SSH host key line(s)
+# Variable: SITE_URL    public URL checked after the deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two deploys at once; never cancel one halfway.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Only after a green CI run of a push to main (not of a pull request).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'   # the VM's Python (Ubuntu 24.04)
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+
+      # ME_NATIVE_ARCH=OFF: the runner's CPU is newer than the VM's Graviton2, and a
+      # -march=native build could use instructions the VM doesn't have (SIGILL).
+      - name: Build the wheel
+        run: python -m pip wheel . -w dist --no-deps --config-settings=cmake.define.ME_NATIVE_ARCH=OFF
+
+      - name: Test the wheel
+        run: |
+          python -m venv /tmp/t
+          /tmp/t/bin/pip install -q "$(ls dist/*.whl)[web]" pytest
+          /tmp/t/bin/python -m pytest -q tests/python
+
+      - name: Bundle source + wheel
+        run: |
+          git archive --format=tar.gz -o source.tar.gz HEAD
+          tar -cf bundle.tar source.tar.gz -C dist "$(cd dist && ls *.whl)"
+          tar -tvf bundle.tar
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bundle
+          path: bundle.tar
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.SITE_URL }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: bundle
+
+      - name: SSH key and host key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # The server runs its own installer: the key can do nothing but this.
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          SHA: ${{ needs.build.outputs.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+              "me-deploy@${DEPLOY_HOST}" "deploy ${SHA}" < bundle.tar
+
+      - name: Check the public site
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          curl -fsS --retry 5 --retry-delay 3 --retry-all-errors "${SITE_URL}/_stcore/health"
+          echo " <- ${SITE_URL}"
+
+      - name: Remove the key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

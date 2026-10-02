@@ -1,0 +1,13 @@
+#!/bin/sh
+# The only thing the CI deploy key can run (forced command in me-deploy's
+# authorized_keys, together with `restrict`: no shell, no forwarding, no pty).
+#     ssh me-deploy@host "deploy <git-sha>" < bundle.tar
+# Installed by provision.sh as /usr/local/bin/me-deploy-entry.
+set -eu
+request="${SSH_ORIGINAL_COMMAND:-}"
+sha="${request#deploy }"
+if [ "$request" = "$sha" ] || ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{7,40}'; then
+    echo 'usage: ssh me-deploy@host "deploy <git-sha>" < bundle.tar' >&2
+    exit 2
+fi
+exec sudo -n /usr/local/sbin/me-deploy-receive "$sha"
