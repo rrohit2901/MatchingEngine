@@ -202,6 +202,8 @@ def filled_by_source(result: BacktestResult) -> dict[str, int]:
     return dict(sorted(sources.items()))
 
 
+PROGRESS_PREFIX = "ME-PROGRESS"
+
 VENUE_ANOMALIES = ("unknown_order", "modify_unknown", "duplicate_add", "cancel_oversized",
                    "bad_side", "bad_price", "unknown_action")
 
@@ -348,7 +350,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         return fail("strategy_init", exc)
 
     on_progress = None
-    if args.progress:
+    if args.progress == "-":
+        # Progress as lines on stderr. A sandbox (isolate) makes the run's files
+        # unreadable from outside until it ends, but a stream can be read live.
+        def on_progress(fraction: float) -> None:
+            print(f"{PROGRESS_PREFIX} {fraction:.4f}", file=sys.stderr, flush=True)
+    elif args.progress:
         progress_path = Path(args.progress)
         started = time.monotonic()
 
@@ -413,7 +420,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--orders-csv")
     run.add_argument("--out", help="write result.json, fills.csv and orders.csv into this directory "
                                    "(on failure, result.json holds the error)")
-    run.add_argument("--progress", help="keep this JSON file updated with how far the replay is (0-1)")
+    run.add_argument("--progress", help="keep this JSON file updated with how far the replay is (0-1); "
+                                        "'-' prints 'ME-PROGRESS <fraction>' lines on stderr instead")
     run.add_argument("--quiet", action="store_true", help="do not print the report")
     run.set_defaults(func=cmd_run)
 

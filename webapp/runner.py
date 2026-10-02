@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import queue
 import resource
 import shutil
 import signal
@@ -34,6 +35,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import time as Time
 from pathlib import Path
@@ -170,7 +172,7 @@ def _toml(value: Any) -> str:
     raise TypeError(f"cannot write {type(value).__name__} to TOML")
 
 
-def run_config(settings: Settings, params: dict[str, Any], data_dir: Path) -> str:
+def run_config(settings: Settings, params: dict[str, Any], data_dir: "Path | str") -> str:
     """The run's config file. Generated here, never taken from the visitor."""
     s = settings
     sections = {
@@ -196,28 +198,60 @@ def run_config(settings: Settings, params: dict[str, Any], data_dir: Path) -> st
 
 # --- execution -------------------------------------------------------------------
 
+PROGRESS_PREFIX = "ME-PROGRESS"   # matching_engine.cli writes these on stderr with --progress -
+STDERR_TAIL_LINES = 200
+
+
 @dataclass
 class Outcome:
     returncode: int
     wall_s: float
     peak_mb: int
-    killed_for: Optional[str] = None   # "time", "memory" or None
+    killed_for: Optional[str] = None   # "time", "cpu", "memory", "output" or None
+    stderr_tail: str = ""              # what the run wrote on stderr, minus progress lines
+
+
+class _StderrReader(threading.Thread):
+    """Reads a child's stderr as it runs: progress lines go to on_progress, the rest
+    is kept (only the last lines, so a chatty strategy can't use up memory)."""
+
+    def __init__(self, stream, on_progress: Callable[[float], None]):
+        super().__init__(daemon=True)
+        self.stream, self.on_progress = stream, on_progress
+        self.lines: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
+
+    def run(self) -> None:
+        for raw in self.stream:
+            line = raw.decode(errors="replace").rstrip("\n")
+            if line.startswith(PROGRESS_PREFIX + " "):
+                try:
+                    self.on_progress(float(line.split()[1]))
+                except (IndexError, ValueError):
+                    pass
+            else:
+                self.lines.append(line)
+
+    def text(self) -> str:
+        return "\n".join(self.lines)
 
 
 class LocalBackend:
-    """A child process with an empty environment, rlimits and a watchdog. Not a sandbox."""
+    """A child process with an empty environment, rlimits and a watchdog. Not a sandbox:
+    the code can still read files and use the network. For running the UI locally."""
 
     poll_s = 0.2
+
+    def visible_data_dir(self, data_dir: Path) -> str:
+        return str(data_dir)
 
     def execute(self, run_dir: Path, command: list[str], limits: Limits,
                 on_progress: Callable[[float], None]) -> Outcome:
         env = {"PATH": "/usr/bin:/bin", "HOME": str(run_dir), "LANG": "C.UTF-8",
                "PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1"}
-
         log = open(run_dir / "log.txt", "wb")
         started = time.monotonic()
-        proc = subprocess.Popen(command, cwd=run_dir, env=env, stdin=subprocess.DEVNULL, stdout=log,
-                                stderr=subprocess.STDOUT, start_new_session=True)
+        proc = subprocess.Popen([sys.executable, *command], cwd=run_dir, env=env, stdin=subprocess.DEVNULL,
+                                stdout=log, stderr=subprocess.PIPE, start_new_session=True)
         # Limits are set on the child from here rather than with preexec_fn, which is
         # unsafe in a multi-threaded parent such as Streamlit. Python's own start-up
         # takes far longer than this call, so no user code runs before it applies.
@@ -228,6 +262,8 @@ class LocalBackend:
             resource.prlimit(proc.pid, resource.RLIMIT_FSIZE, (size, size))
         except ProcessLookupError:
             pass   # already gone; wait4 below reports how it ended
+        reader = _StderrReader(proc.stderr, on_progress)
+        reader.start()
         killed_for = None
         try:
             while True:
@@ -235,7 +271,14 @@ class LocalBackend:
                 pid, status, usage = os.wait4(proc.pid, os.WNOHANG)
                 if pid:
                     proc.returncode = os.waitstatus_to_exitcode(status)
-                    return Outcome(proc.returncode, time.monotonic() - started, usage.ru_maxrss // 1024, killed_for)
+                    reader.join(timeout=2)
+                    code = proc.returncode
+                    if killed_for is None and code == -signal.SIGXCPU:
+                        killed_for = "cpu"
+                    elif killed_for is None and code == -signal.SIGXFSZ:
+                        killed_for = "output"
+                    return Outcome(code, time.monotonic() - started, usage.ru_maxrss // 1024, killed_for,
+                                   reader.text())
                 if killed_for is None:
                     if time.monotonic() - started > limits.wall_s:
                         killed_for = "time"
@@ -243,15 +286,109 @@ class LocalBackend:
                         killed_for = "memory"
                     if killed_for:
                         _kill_group(proc.pid)
-                fraction = _read_progress(run_dir / "progress.json")
-                if fraction is not None:
-                    on_progress(fraction)
                 time.sleep(self.poll_s)
         finally:
             log.close()
             if proc.returncode is None:   # interrupted while waiting: never leave it running
                 _kill_group(proc.pid)
                 os.waitpid(proc.pid, 0)
+
+
+class IsolateBackend:
+    """Each run in an isolate box (https://github.com/ioi/isolate): its own PID, mount and
+    network namespaces (no network), a UID of its own, cgroup limits on memory and
+    processes, CPU and wall-clock limits, a file-size limit, and an empty environment.
+    Inside the box: the system's /usr and /lib (read-only), the virtualenv (read-only),
+    the data at /data (read-only) and a private /box working directory.
+
+    Box ids come from a pool of `boxes` (one per concurrent run)."""
+
+    def __init__(self, boxes: int, data_dir: Path, isolate: str = "isolate", venv: Optional[Path] = None):
+        self.data_dir = Path(data_dir).resolve()   # mounted read-only at /data
+        self.isolate = isolate
+        # Resolved: /opt/me/current is a symlink, and the box must mount the real release.
+        self.venv = Path(venv or sys.prefix).resolve()
+        self._free: "queue.Queue[int]" = queue.Queue()
+        for box in range(boxes):
+            self._free.put(box)
+
+    def visible_data_dir(self, data_dir: Path) -> str:
+        return "/data"
+
+    def _isolate(self, box: int, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([self.isolate, "--cg", f"--box-id={box}", *args],
+                              capture_output=True, text=True, check=False)
+
+    def execute(self, run_dir: Path, command: list[str], limits: Limits,
+                on_progress: Callable[[float], None]) -> Outcome:
+        box = self._free.get()
+        try:
+            return self._execute(box, run_dir, command, limits, on_progress)
+        finally:
+            self._isolate(box, "--cleanup")
+            self._free.put(box)
+
+    def _execute(self, box: int, run_dir: Path, command: list[str], limits: Limits,
+                 on_progress: Callable[[float], None]) -> Outcome:
+        self._isolate(box, "--cleanup")   # a crashed earlier run may have left it initialised
+        init = self._isolate(box, "--init")
+        if init.returncode != 0:
+            raise RuntimeError(f"isolate --init failed: {init.stderr.strip()}")
+        box_dir = Path(init.stdout.strip()) / "box"
+        for name in ("strategy.py", "run.toml"):
+            shutil.copy(run_dir / name, box_dir / name)
+
+        meta = run_dir / "meta.txt"
+        env = {"PATH": "/usr/bin:/bin", "HOME": "/box", "LANG": "C.UTF-8", "PYTHONHASHSEED": "0",
+               "PYTHONDONTWRITEBYTECODE": "1", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}
+        args = [self.isolate, "--cg", f"--box-id={box}", "--run", f"--meta={meta}",
+                f"--time={limits.cpu_s:g}", "--extra-time=2", f"--wall-time={limits.wall_s:g}",
+                f"--cg-mem={limits.memory_mb * 1024}", f"--fsize={limits.output_mb * 1024}",
+                "--processes=64",   # threads count too: pyarrow and numpy start a few
+                f"--dir=/data={self.data_dir}", f"--dir={self.venv}", "--stdout=log.txt",
+                *[f"--env={k}={v}" for k, v in env.items()],
+                "--", str(self.venv / "bin" / "python"), *command]
+        started = time.monotonic()
+        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        reader = _StderrReader(proc.stderr, on_progress)
+        reader.start()
+        proc.wait()
+        reader.join(timeout=2)
+        wall = time.monotonic() - started
+
+        # The box is the caller's again once the run is over: bring the results out.
+        (run_dir / "result").mkdir(exist_ok=True)
+        if (box_dir / "result").is_dir():
+            for f in (box_dir / "result").iterdir():
+                shutil.copy(f, run_dir / "result" / f.name)
+        if (box_dir / "log.txt").exists():
+            shutil.copy(box_dir / "log.txt", run_dir / "log.txt")
+        info = _parse_meta(meta)
+        killed_for = None
+        if info.get("cg-oom-killed") == "1":
+            killed_for = "memory"
+        elif info.get("status") == "TO":
+            killed_for = "cpu" if float(info.get("time", 0)) >= limits.cpu_s else "time"
+        elif info.get("exitsig") == str(int(signal.SIGXFSZ)):
+            killed_for = "output"
+        code = int(info["exitcode"]) if "exitcode" in info else -int(info.get("exitsig", 0) or 0)
+        peak_kb = int(info.get("cg-mem") or info.get("max-rss") or 0)
+        # isolate's own one-line verdict ("OK (…)", "Time limit exceeded", …) is not the strategy's output.
+        tail = reader.text().splitlines()
+        if tail and tail[-1].split(" ", 1)[0] in {"OK", "Time", "Wall", "Caught", "Exited", "Out", "Memory"}:
+            tail = tail[:-1]
+        return Outcome(code, wall, peak_kb // 1024, killed_for, "\n".join(tail))
+
+
+def _parse_meta(path: Path) -> dict[str, str]:
+    info: dict[str, str] = {}
+    try:
+        for line in path.read_text().splitlines():
+            key, _, value = line.partition(":")
+            info[key] = value
+    except OSError:
+        pass
+    return info
 
 
 def _rss_mb(pid: int) -> int:
@@ -270,13 +407,6 @@ def _kill_group(pid: int) -> None:
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-
-
-def _read_progress(path: Path) -> Optional[float]:
-    try:
-        return float(json.loads(path.read_text())["fraction"])
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
 
 
 # --- the runner ------------------------------------------------------------------
@@ -371,9 +501,11 @@ class Runner:
             started = time.monotonic()
             on_status(Status("running"))
             (run_dir / "strategy.py").write_text(code)
-            (run_dir / "run.toml").write_text(run_config(settings, params, self.data_dir))
-            command = [sys.executable, "-m", "matching_engine.cli", "run", "--config", "run.toml",
-                       "--out", "result", "--progress", "progress.json", "--quiet"]
+            (run_dir / "run.toml").write_text(
+                run_config(settings, params, self.backend.visible_data_dir(self.data_dir)))
+            # The backend supplies the interpreter (the host's, or the virtualenv inside the box).
+            command = ["-m", "matching_engine.cli", "run", "--config", "run.toml",
+                       "--out", "result", "--progress", "-", "--quiet"]
             outcome = self.backend.execute(
                 run_dir, command, self.limits,
                 lambda f: on_status(Status("running", fraction=f, elapsed_s=time.monotonic() - started)))
@@ -388,6 +520,8 @@ class Runner:
     def _collect(self, run_dir: Path, outcome: Outcome) -> RunResult:
         log_path = run_dir / "log.txt"
         log = log_path.read_bytes()[-self.LOG_TAIL_BYTES:].decode(errors="replace") if log_path.exists() else ""
+        if outcome.stderr_tail.strip():
+            log = (log.rstrip("\n") + "\n" if log.strip() else "") + outcome.stderr_tail[-self.LOG_TAIL_BYTES:]
         base = dict(log=log, run_s=outcome.wall_s, peak_mb=outcome.peak_mb)
         limits = self.limits
 
@@ -398,9 +532,9 @@ class Runner:
             return failure("time_limit", f"The run was stopped after {limits.wall_s:g} s (the time limit).")
         if outcome.killed_for == "memory":
             return failure("memory_limit", f"The run was stopped for using over {limits.memory_mb} MB of memory.")
-        if outcome.returncode == -signal.SIGXCPU or (outcome.returncode == -signal.SIGKILL and outcome.wall_s >= limits.cpu_s):
+        if outcome.killed_for == "cpu":
             return failure("cpu_limit", f"The run was stopped after {limits.cpu_s:g} s of CPU time (the limit).")
-        if outcome.returncode == -signal.SIGXFSZ:
+        if outcome.killed_for == "output":
             return failure("output_limit", f"The run wrote more than {limits.output_mb} MB.")
 
         out = run_dir / "result"

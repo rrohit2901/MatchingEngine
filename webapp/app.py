@@ -7,7 +7,11 @@ parameters are in the main area. A run executes in its own limited process
 (webapp/runner.py) and its results appear on this page when it finishes.
 
 Environment:
-    ME_DATA_DIR   converted data (default: data/databento in the repo)
+    ME_DATA_DIR         converted data (default: data/databento in the repo)
+    ME_BACKEND          "local" (default; NOT a sandbox) or "isolate" (production)
+    ME_MAX_CONCURRENT   runs executing at once (default 2)
+    ME_MAX_QUEUE        runs allowed to wait (default 20)
+    ME_MEMORY_MB        memory limit per run (default 1536)
 """
 
 from __future__ import annotations
@@ -27,7 +31,8 @@ import streamlit as st
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))   # `streamlit run` puts webapp/ on the path, not the repo
 
-from webapp.runner import Runner, RunResult, Settings, Status, available_data   # noqa: E402
+from webapp.runner import (IsolateBackend, Limits, LocalBackend, Runner, RunResult, Settings,  # noqa: E402
+                           Status, available_data)
 
 try:
     import tomllib
@@ -45,8 +50,15 @@ st.set_page_config(page_title="Nasdaq replay backtester", page_icon="📈", layo
 
 @st.cache_resource
 def runner() -> Runner:
-    # One Runner for every visitor: it is the queue (2 runs at a time, 20 waiting).
-    return Runner(DATA_DIR)
+    # One Runner for every visitor: it is the queue.
+    concurrent = int(os.environ.get("ME_MAX_CONCURRENT", "2"))
+    limits = Limits(memory_mb=int(os.environ.get("ME_MEMORY_MB", "1536")))
+    if os.environ.get("ME_BACKEND", "local") == "isolate":
+        backend = IsolateBackend(boxes=concurrent, data_dir=DATA_DIR)
+    else:
+        backend = LocalBackend()
+    return Runner(DATA_DIR, backend=backend, limits=limits, max_concurrent=concurrent,
+                  max_queue=int(os.environ.get("ME_MAX_QUEUE", "20")))
 
 
 @st.cache_data
@@ -378,8 +390,9 @@ def main() -> None:
     c1, c2 = st.columns([1, 4])
     clicked = c1.button("Run backtest", type="primary", disabled=job is not None or settings is None,
                         width="stretch")
+    lim = runner().limits
     c2.caption(f"Server: {running} running, {waiting} waiting. One run per visitor at a time, "
-               f"{COOLDOWN_S} s apart; each run is limited to 120 s and 1.5 GB.")
+               f"{COOLDOWN_S} s apart; each run is limited to {lim.wall_s:g} s and {lim.memory_mb / 1024:.1f} GB.")
 
     if clicked and job is None and settings is not None:
         since = time.time() - st.session_state.get("last_finished", 0)
