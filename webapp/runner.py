@@ -439,17 +439,79 @@ class QueueFull(Exception):
     pass
 
 
+@dataclass
+class RateLimits:
+    """Per client (an IP address on the public site). 0 disables a limit."""
+    max_active: int = 1        # runs running or queued at once
+    cooldown_s: float = 30.0   # from the end of one run to the start of the next
+    per_hour: int = 20         # runs started in any rolling hour
+
+
+class RateLimiter:
+    """Keeps one client from monopolising the queue or the CPU. Thread-safe: every
+    visitor's Streamlit session is a thread calling into the same Runner."""
+
+    def __init__(self, limits: RateLimits):
+        self.limits = limits
+        self._lock = threading.Lock()
+        self._active: dict[str, int] = {}
+        self._starts: dict[str, deque] = {}
+        self._last_end: dict[str, float] = {}
+
+    def acquire(self, client: str, now: Optional[float] = None) -> Optional[str]:
+        """None if the client may start a run (and it is counted), else why not."""
+        lim = self.limits
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            self._prune(now)
+            if lim.max_active and self._active.get(client, 0) >= lim.max_active:
+                return "You already have a run in progress or waiting. One at a time, please."
+            last = self._last_end.get(client)
+            if lim.cooldown_s and last is not None and now - last < lim.cooldown_s:
+                return f"Please wait {math.ceil(lim.cooldown_s - (now - last))} s before the next run."
+            starts = self._starts.setdefault(client, deque())
+            while starts and now - starts[0] >= 3600:
+                starts.popleft()
+            if lim.per_hour and len(starts) >= lim.per_hour:
+                minutes = math.ceil((3600 - (now - starts[0])) / 60)
+                return (f"That's {lim.per_hour} runs in the last hour from your address, the limit. "
+                        f"Try again in {minutes} min.")
+            starts.append(now)
+            self._active[client] = self._active.get(client, 0) + 1
+            return None
+
+    def release(self, client: str, now: Optional[float] = None) -> None:
+        with self._lock:
+            left = self._active.get(client, 0) - 1
+            if left > 0:
+                self._active[client] = left
+            else:
+                self._active.pop(client, None)
+            self._last_end[client] = time.monotonic() if now is None else now
+
+    def _prune(self, now: float) -> None:
+        # Forget clients idle for over an hour, so the tables can't grow without bound.
+        if len(self._starts) < 1_000:
+            return
+        for client in [c for c, q in self._starts.items() if (not q or now - q[-1] >= 3600)
+                       and c not in self._active]:
+            self._starts.pop(client, None)
+            self._last_end.pop(client, None)
+
+
 class Runner:
     LOG_TAIL_BYTES = 20_000
 
     def __init__(self, data_dir: Path, backend: Optional[LocalBackend] = None, limits: Optional[Limits] = None,
-                 max_concurrent: int = 2, max_queue: int = 20, work_dir: Optional[Path] = None):
+                 max_concurrent: int = 2, max_queue: int = 20, work_dir: Optional[Path] = None,
+                 rate_limits: Optional[RateLimits] = None):
         self.data_dir = Path(data_dir).resolve()
         self.backend = backend or LocalBackend()
         self.limits = limits or Limits()
         self.max_concurrent = max_concurrent
         self.max_queue = max_queue
         self.work_dir = work_dir
+        self.rate = RateLimiter(rate_limits) if rate_limits else None
         self._cond = threading.Condition()
         self._waiting: list[object] = []
         self._running = 0
@@ -489,11 +551,26 @@ class Runner:
 
     # A run ------------------------------------------------------------------
     def run(self, settings: Settings, code: str, params: dict[str, Any],
-            on_status: Callable[[Status], None] = lambda s: None) -> RunResult:
+            on_status: Callable[[Status], None] = lambda s: None, client: Optional[str] = None) -> RunResult:
+        """`client` identifies who is asking (an IP address) for the rate limits; None skips them."""
         problems = validate(settings, code, params, self.data_dir, self.limits)
         if problems:
             return RunResult(False, error={"kind": "invalid", "message": " ".join(problems),
                                            "location": None, "traceback": []})
+        limited = client is not None and self.rate is not None
+        if limited:
+            refusal = self.rate.acquire(client)
+            if refusal:
+                return RunResult(False, error={"kind": "rate_limited", "message": refusal,
+                                               "location": None, "traceback": []})
+        try:
+            return self._run_counted(settings, code, params, on_status)
+        finally:
+            if limited:
+                self.rate.release(client)
+
+    def _run_counted(self, settings: Settings, code: str, params: dict[str, Any],
+                     on_status: Callable[[Status], None]) -> RunResult:
         try:
             waited = self._acquire(on_status)
         except QueueFull:

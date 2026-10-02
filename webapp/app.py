@@ -12,6 +12,8 @@ Environment:
     ME_MAX_CONCURRENT   runs executing at once (default 2)
     ME_MAX_QUEUE        runs allowed to wait (default 20)
     ME_MEMORY_MB        memory limit per run (default 1536)
+    ME_RUNS_PER_HOUR    runs one IP address may start per rolling hour (default 20, 0 = no limit)
+    ME_COOLDOWN_S       seconds between one IP's runs (default 30)
 """
 
 from __future__ import annotations
@@ -31,8 +33,8 @@ import streamlit as st
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))   # `streamlit run` puts webapp/ on the path, not the repo
 
-from webapp.runner import (IsolateBackend, Limits, LocalBackend, Runner, RunResult, Settings,  # noqa: E402
-                           Status, available_data)
+from webapp.runner import (IsolateBackend, Limits, LocalBackend, RateLimits, Runner, RunResult,  # noqa: E402
+                           Settings, Status, available_data)
 
 try:
     import tomllib
@@ -42,7 +44,6 @@ except ModuleNotFoundError:   # Python < 3.11
 DATA_DIR = Path(os.environ.get("ME_DATA_DIR", REPO / "data" / "databento"))
 EXAMPLE_CONFIG = REPO / "strategies" / "ob_alpha.toml"
 EXAMPLE_STRATEGY = REPO / "strategies" / "ob_alpha.py"
-COOLDOWN_S = 30
 NEW_YORK = ZoneInfo("America/New_York")
 
 st.set_page_config(page_title="Nasdaq replay backtester", page_icon="📈", layout="wide")
@@ -57,8 +58,21 @@ def runner() -> Runner:
         backend = IsolateBackend(boxes=concurrent, data_dir=DATA_DIR)
     else:
         backend = LocalBackend()
+    rate = RateLimits(max_active=1, cooldown_s=float(os.environ.get("ME_COOLDOWN_S", "30")),
+                      per_hour=int(os.environ.get("ME_RUNS_PER_HOUR", "20")))
     return Runner(DATA_DIR, backend=backend, limits=limits, max_concurrent=concurrent,
-                  max_queue=int(os.environ.get("ME_MAX_QUEUE", "20")))
+                  max_queue=int(os.environ.get("ME_MAX_QUEUE", "20")), rate_limits=rate)
+
+
+def client_ip() -> str:
+    """The visitor's address, for the per-IP limits. In production Streamlit listens
+    on 127.0.0.1 behind Caddy, which replaces any X-Forwarded-For a client sends
+    with the address it actually connected from, so the header can be trusted."""
+    headers = st.context.headers or {}
+    forwarded = headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return st.context.ip_address or "local"
 
 
 @st.cache_data
@@ -78,18 +92,18 @@ class Job:
     """One run, executed on a thread so that touching a widget (which reruns this
     script) never interrupts it. The thread only sets attributes; the page polls."""
 
-    def __init__(self, settings: Settings, code: str, params: dict):
+    def __init__(self, settings: Settings, code: str, params: dict, client: str):
         self.status = Status("queued")
         self.result: RunResult | None = None
         self.started = time.time()
-        self.thread = threading.Thread(target=self._run, args=(settings, code, params), daemon=True)
+        self.thread = threading.Thread(target=self._run, args=(settings, code, params, client), daemon=True)
         self.thread.start()
 
-    def _run(self, settings: Settings, code: str, params: dict) -> None:
+    def _run(self, settings: Settings, code: str, params: dict, client: str) -> None:
         def update(status: Status) -> None:
             self.status = status
         try:
-            self.result = runner().run(settings, code, params, update)
+            self.result = runner().run(settings, code, params, update, client=client)
         except Exception as exc:   # never leave the page waiting forever
             self.result = RunResult(False, error={"kind": "internal", "message": repr(exc),
                                                   "location": None, "traceback": []})
@@ -390,24 +404,23 @@ def main() -> None:
     c1, c2 = st.columns([1, 4])
     clicked = c1.button("Run backtest", type="primary", disabled=job is not None or settings is None,
                         width="stretch")
-    lim = runner().limits
-    c2.caption(f"Server: {running} running, {waiting} waiting. One run per visitor at a time, "
-               f"{COOLDOWN_S} s apart; each run is limited to {lim.wall_s:g} s and {lim.memory_mb / 1024:.1f} GB.")
+    lim, rate = runner().limits, runner().rate.limits
+    c2.caption(f"Server: {running} running, {waiting} waiting. Per visitor: one run at a time, "
+               f"{rate.cooldown_s:g} s apart, up to {rate.per_hour} an hour. "
+               f"Each run is limited to {lim.wall_s:g} s and {lim.memory_mb / 1024:.1f} GB.")
 
     if clicked and job is None and settings is not None:
-        since = time.time() - st.session_state.get("last_finished", 0)
         try:
             params = tomllib.loads(params_text)
         except tomllib.TOMLDecodeError as exc:
             st.error(f"The parameters are not valid TOML: {exc}")
         else:
-            if since < COOLDOWN_S:
-                st.warning(f"Please wait {COOLDOWN_S - since:.0f} s before the next run.")
-            else:
-                st.session_state.job = Job(settings, code, params)
-                st.session_state.pop("result", None)
-                st.rerun()
+            st.session_state.pop("notice", None)
+            st.session_state.job = Job(settings, code, params, client_ip())
+            st.rerun()
 
+    if "notice" in st.session_state:
+        st.warning(st.session_state.notice)
     progress_panel()
     if "result" in st.session_state:
         show_result(st.session_state.result)
@@ -419,8 +432,11 @@ def progress_panel() -> None:
     if job is None:
         return
     if job.result is not None:   # finished: hand over and redraw the whole page with the results
-        st.session_state.result = job.result
-        st.session_state.last_finished = time.time()
+        refused = (job.result.error or {}).get("kind") in ("rate_limited", "busy")
+        if refused:   # nothing ran: keep the results already on the page, say why
+            st.session_state.notice = job.result.error["message"]
+        else:
+            st.session_state.result = job.result
         del st.session_state["job"]
         st.rerun(scope="app")
         return
