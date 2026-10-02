@@ -162,3 +162,81 @@ def test_capital_limit_rejects_in_dollars():
     assert strategy.orders[0].status == "PENDING"
     assert (strategy.orders[1].status, strategy.orders[1].reject_reason) == ("REJECTED", "CAPITAL_LIMIT")
     assert strategy.deployed == pytest.approx(899.91)
+
+
+# --- me-backtest run --out: machine-readable results and failures ---------------
+
+def _day(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    day = tmp_path / "data" / DATE
+    day.mkdir(parents=True)
+    pq.write_table(pa.table(tape(BOOK + [(59_000, "N", "N", 0, 0, 0, True)])), day / "TEST.mbo.parquet")
+    return tmp_path / "data"
+
+
+def _run_out(tmp_path, strategy_source, extra=()):
+    import json
+
+    data = _day(tmp_path)
+    strategy = tmp_path / "s.py"
+    strategy.write_text(textwrap.dedent(strategy_source))
+    out = tmp_path / "out"
+    code = cli.main(["run", "--strategy", str(strategy), "--date", DATE, "--symbol", "TEST", "--data", str(data),
+                     "--start", "09:31:00", "--end", "09:32:00", "--timer-ms", "100",
+                     "--out", str(out), "--progress", str(tmp_path / "progress.json"), "--quiet", *extra])
+    return code, json.loads((out / "result.json").read_text()), out
+
+
+GOOD = """
+    from matching_engine.backtest import Strategy
+
+    class Lift(Strategy):
+        def on_timer(self, ctx):
+            if not getattr(self, "sent", False):
+                self.sent = True
+                ctx.buy(ctx.best_ask.price, 5)
+"""
+
+
+def test_out_writes_results_and_progress(tmp_path):
+    import json
+
+    code, result, out = _run_out(tmp_path, GOOD)
+    assert code == 0 and result["ok"]
+    assert result["summary"]["final_position"] == 5
+    assert result["filled_by_source"] == {"AGGRESSIVE": 5}
+    assert result["strategy"]["name"] == "Lift"
+    assert result["equity"] and len(result["equity"][0]) == 5
+    assert (out / "fills.csv").read_text().count("\n") == 2   # header + 1 fill
+    assert json.loads((tmp_path / "progress.json").read_text())["fraction"] == 1.0
+
+
+@pytest.mark.parametrize("source, kind, message, line", [
+    ("from matching_engine.backtest import Strategy\nclass S(Strategy)\n    pass\n",
+     "strategy_load", "SyntaxError", 2),
+    ("from matching_engine.backtest import Strategy\nclass S(Strategy):\n"
+     "    def __init__(self, size):\n        super().__init__(size=size)\n",
+     "strategy_init", "TypeError", None),
+    ("from matching_engine.backtest import Strategy\nclass S(Strategy):\n"
+     "    def on_timer(self, ctx):\n        x = 1\n        return 1 / 0\n",
+     "strategy_runtime", "ZeroDivisionError", 5),
+])
+def test_out_reports_strategy_failures(tmp_path, source, kind, message, line):
+    code, result, _ = _run_out(tmp_path, source)
+    assert code == 2 and not result["ok"]
+    err = result["error"]
+    assert err["kind"] == kind
+    assert err["message"].startswith(message)
+    if line is not None:
+        assert err["location"]["line"] == line
+    # Only the strategy's own frames, never the backtester's internals.
+    assert all("matching_engine" not in t for t in err["traceback"]) or kind == "strategy_init"
+
+
+def test_out_reports_config_failures(tmp_path):
+    code, result, _ = _run_out(tmp_path, GOOD, extra=["--end", "09:30:00"])   # window ends before it starts
+    assert code == 2
+    assert result["error"]["kind"] == "config"
+    assert "empty" in result["error"]["message"]

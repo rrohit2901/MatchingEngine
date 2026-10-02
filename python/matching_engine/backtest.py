@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from datetime import date as Date
 from datetime import datetime, time as Time, timezone
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
 from . import replay
@@ -312,11 +312,17 @@ def _summarise(sim: Simulator, fills: list[Fill], orders: list[Order],
     }
 
 
-def run_backtest(strategy: Strategy, config: BacktestConfig, mbo: Optional[dict] = None) -> BacktestResult:
+def run_backtest(strategy: Strategy, config: BacktestConfig, mbo: Optional[dict] = None,
+                 on_progress: Optional[Callable[[float], None]] = None,
+                 progress_interval_s: float = 1.0) -> BacktestResult:
     """Replay `config.symbol` on `config.date` with `strategy` trading.
 
     `mbo` may pass already-loaded columns (matching_engine.replay.load_mbo); by
     default they are read from config.data_dir.
+
+    `on_progress(fraction)` is called about every `progress_interval_s` of wall
+    time with how far through the trading window the replay is (0.0-1.0), and
+    once with 1.0 at the end.
     """
     timings: dict[str, float] = {}
     started = time.perf_counter()
@@ -325,17 +331,26 @@ def run_backtest(strategy: Strategy, config: BacktestConfig, mbo: Optional[dict]
         mbo = replay.load_mbo(mbo_path)
     timings["load_s"] = time.perf_counter() - started
 
-    sim = Simulator(config.sim_config())
+    sim_config = config.sim_config()
+    sim = Simulator(sim_config)
     ctx = Context(sim, config.symbol)
     started_flag = False
+    calls = 0
+    window = max(1, sim_config.trade_end_ns - sim_config.trade_start_ns)
+    next_report = time.monotonic() + progress_interval_s
 
     def on_timer() -> None:
-        nonlocal started_flag
+        nonlocal started_flag, calls, next_report
         ctx._advance()
         if not started_flag:
             started_flag = True
             strategy.on_start(ctx)
         strategy.on_timer(ctx)
+        calls += 1
+        # Checking the clock every call would cost more than the strategy itself.
+        if on_progress is not None and calls % 1_000 == 0 and time.monotonic() >= next_report:
+            next_report = time.monotonic() + progress_interval_s
+            on_progress(min(1.0, (sim.now - sim_config.trade_start_ns) / window))
 
     replay_started = time.perf_counter()
     sim.run(mbo, on_timer)
@@ -353,4 +368,6 @@ def run_backtest(strategy: Strategy, config: BacktestConfig, mbo: Optional[dict]
         equity.append((ts, position, to_dollars(cash_ticks), mid, value))
 
     stats = sim.stats()
+    if on_progress is not None:
+        on_progress(1.0)
     return BacktestResult(config, _summarise(sim, fills, orders, equity), fills, orders, equity, stats, timings)
