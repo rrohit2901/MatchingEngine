@@ -47,26 +47,9 @@ using EventLogger = Logger<LockQueue>;
 // Book views
 // ---------------------------------------------------------------------------
 
-// BookLevel is a live handle onto the book, not a snapshot: it holds a
-// shared_ptr<OrderManager> and re-reads it on every accessor, so a Python object
-// wrapping one would report whatever the book looks like when it is read rather
-// than when it was fetched. Flat values captured at call time avoid that whole
-// class of surprise.
-struct PriceLevel {
-    int price;
-    int quantity;
-    std::vector<order_id_t> order_ids;
-};
-
-std::vector<PriceLevel> snapshot(const std::vector<std::shared_ptr<BookLevel>>& levels) {
-    std::vector<PriceLevel> out;
-    out.reserve(levels.size());
-    for (const auto& level : levels) {
-        if (!level) continue;
-        out.push_back(PriceLevel{level->getPrice(), level->getTotalQuantity(), level->getOrders()});
-    }
-    return out;
-}
+// The book hands out LevelView values captured at call time, so they bind
+// directly as PriceLevel snapshots.
+using PriceLevel = LevelView;
 
 // ---------------------------------------------------------------------------
 // The facade
@@ -136,16 +119,15 @@ class PyMatchingEngine {
     }
 
     std::vector<PriceLevel> buyLevels(int num_levels) {
-        return snapshot(engine().getBuySideView(checkLevels(num_levels)));
+        return engine().getBuySideView(checkLevels(num_levels));
     }
 
     std::vector<PriceLevel> sellLevels(int num_levels) {
-        return snapshot(engine().getSellSideView(checkLevels(num_levels)));
+        return engine().getSellSideView(checkLevels(num_levels));
     }
 
     std::pair<std::vector<PriceLevel>, std::vector<PriceLevel>> book(int num_levels) {
-        const auto view = engine().getOrderBookView(checkLevels(num_levels));
-        return {snapshot(view.first), snapshot(view.second)};
+        return engine().getOrderBookView(checkLevels(num_levels));
     }
 
     // Runs from the module's teardown hook, where the interpreter is finalizing;
@@ -297,8 +279,7 @@ std::string riskParamsRepr(const RiskParams& params) {
 
 std::string priceLevelRepr(const PriceLevel& level) {
     std::ostringstream out;
-    out << "PriceLevel(price=" << level.price << ", quantity=" << level.quantity
-        << ", orders=" << level.order_ids.size() << ")";
+    out << "PriceLevel(price=" << level.price << ", quantity=" << level.quantity << ")";
     return out.str();
 }
 
@@ -336,7 +317,6 @@ PYBIND11_MODULE(_core, m) {
                            "One price level, captured at the moment it was requested.")
         .def_readonly("price", &PriceLevel::price)
         .def_readonly("quantity", &PriceLevel::quantity)
-        .def_readonly("order_ids", &PriceLevel::order_ids)
         .def("__repr__", &priceLevelRepr);
 
     py::class_<PyMatchingEngine>(m, "MatchingEngine", R"doc(

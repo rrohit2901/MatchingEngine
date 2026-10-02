@@ -11,28 +11,54 @@ ones that are unflattering.
 
 ## Performance
 
-300k samples per operation, `-O3 -march=native`, on a 12th-gen i7-1250U, pinned to two
-cores. Every figure includes one `steady_clock::now()` pair (~28 ns) — subtract it.
-Deeper tail percentiles, and why they are not trustworthy on this machine, are in
-[`bench/README.md`](bench/README.md).
+300k samples per operation, `-O3 -march=native`, on a 12th-gen i7-1250U (WSL2), pinned to
+the two hyperthreads of one core (`taskset -c 6,7` cool, `2,3` sustained — equivalent
+pairs under WSL2). Every figure includes one `steady_clock::now()`
+pair — subtract it. Deeper tail percentiles, and why they are not trustworthy on this
+machine, are in [`bench/README.md`](bench/README.md).
 
-| operation | P50 | P99 |
-|---|---:|---:|
-| OrderBook add | 84 ns | 220 ns |
-| OrderBook modify | 226 ns | 485 ns |
-| OrderBook cancel | 151 ns | 333 ns |
-| Engine add | 383 ns | 843 ns |
-| Engine modify | 557 ns | 1,023 ns |
-| Engine cancel | 283 ns | 525 ns |
+This laptop CPU throttles under sustained load and the numbers move with it, so both states
+are shown. **Cool** is a single run on an idle machine (timer overhead 20 ns). **Sustained**
+is the median of three runs taken after ~40 minutes of continuous benchmarking (timer
+overhead 36 ns). Same binary in both columns.
+
+| operation | P50 cool | P99 cool | P50 sustained | P99 sustained |
+|---|---:|---:|---:|---:|
+| OrderBook add | 39 ns | 148 ns | 67 ns | 148 ns |
+| OrderBook modify | 98 ns | 142 ns | 179 ns | 355 ns |
+| OrderBook cancel | 64 ns | 85 ns | 116 ns | 218 ns |
+| Engine add | 201 ns | 269 ns | 398 ns | 640 ns |
+| Engine modify | 528 ns | 893 ns | 521 ns | 905 ns |
+| Engine cancel | 247 ns | 409 ns | 238 ns | 413 ns |
 
 `OrderBook` rows are the book in isolation. `Engine` rows add risk checks, matching, and
-event publishing.
+event publishing. The timer overhead printed by `bench_latency` is the quickest way to tell
+which state a run was taken in. Engine P50s also swing by ~100 ns from run to run within a
+state, so compare builds by running them interleaved, never one after the other.
 
-**Events no longer allocate.** The queue used to carry `unique_ptr<Event>`: a `new` on the
+**Orders live in a slab, not a hash map.** `OrderManager` used to be an
+`unordered_map<id, unique_ptr<Order>>`, which meant two heap allocations per add and three
+dependent pointer loads per lookup. It is now a pre-allocated vector of 32-byte slots with
+an intrusive free list, and an order id encodes its slot, so a lookup is an index plus a
+generation check and nothing on the order path allocates. Against the previous commit,
+both built and run interleaved in the same (sustained) session, so the deltas are fair even
+though the absolute values are the throttled ones:
+
+| OrderBook operation | P50 | P99.9 |
+|---|---:|---:|
+| add | 117 → 67 ns | 1,820 → 591 ns |
+| modify | 216 → 179 ns | 599 → 429 ns |
+| cancel | 136 → 116 ns | 352 → 255 ns |
+
+Design, the id scheme, the knock-on changes, and why `max` is still in milliseconds:
+[`docs/optimization#3.md`](docs/optimization%233.md).
+
+**Events no longer allocate** (previous change; figures below are from that change's
+measurement, 2026-09-11). The queue used to carry `unique_ptr<Event>`: a `new` on the
 matching thread and a `delete` on the logger thread, which is a cross-thread free and the
 slow path in every general-purpose allocator. Events are now flat structs in a trivially
-copyable `std::variant` (40 bytes) carried by value, so a slot write is a memcpy and the
-publish path allocates nothing.
+copyable `std::variant` (40 bytes then, 48 since ids became 64-bit) carried by value, so a
+slot write is a memcpy and the publish path allocates nothing.
 
 Measured directly — construct one `TradeEvent` and push it into the ring with a consumer
 draining, 400k samples, median of five interleaved runs of both binaries:
@@ -54,17 +80,17 @@ End to end, against the previous figures on the same machine and methodology:
 | cancel | 452 → 283 ns | 1,482 → 525 ns |
 
 The `OrderBook` rows are the control for that comparison — unchanged code, so they should
-not move. Their P50s match the earlier run within 4% (82/217/148 then, 84/226/151 now),
+not move. Their P50s matched the earlier run within 4% (82/217/148 before, 84/226/151 after),
 which is what makes the P50 column above a fair comparison. Their **P99s are 1.2-1.7x
-worse** than the earlier run (188/289/251 then, 220/485/333 now), so the machine was having
+worse** than the earlier run (188/289/251 before, 220/485/333 after), so the machine was having
 a worse tail day than the baseline: the P99 improvements are understated, not flattered.
 
-**Where the 383 ns goes.** The book is not the bottleneck, and neither is the queue:
+**Where an engine add goes.** The book is not the bottleneck, and neither is the queue:
 
 | component | P50 |
 |---|---:|
-| `OrderBook::addOrder` | 84 ns |
-| publish one event (construct in variant + ring push) | 77 ns |
+| `OrderBook::addOrder` | 67 ns |
+| publish one event (construct in variant + ring push; 2026-09-11) | 77 ns |
 
 Matching accounts for most of the balance: `tryMatch` performs a modify-shaped book mutation
 even when nothing crosses, and that is now the largest single component of an engine add.
@@ -138,7 +164,7 @@ be a lock-free SPSC ring rather than a general-purpose queue.
 | `OrderBook` | both sides plus the order registry |
 | `OrderBookSide<Side>` | price-ordered levels; comparator chosen at compile time from the side |
 | `BookLevel` | one price, FIFO queue of order ids |
-| `OrderManager` | owns every live `Order`; mints ids |
+| `OrderManager` | owns every live `Order` in a pre-allocated slab; mints generation-tagged ids |
 | `Matcher` | crosses an incoming order against the opposite side |
 | `RiskManager` | pre-trade fat-finger checks |
 | `EventVariant` | the event itself — a trivially copyable `std::variant` carried by value |
@@ -152,9 +178,17 @@ be a lock-free SPSC ring rather than a general-purpose queue.
 per-field accessors on `OrderManager` were removed so the one-lookup-per-field pattern
 cannot creep back in.
 
-**Dead orders vanish.** An order is erased from `OrderManager` the moment it is cancelled or
-filled, so the absence of a view *is* the signal that it is gone. There is no terminal state
-to query — the event log is the record of what happened.
+**Dead orders vanish.** An order's slot is released by `OrderManager` the moment it is
+cancelled or filled, so the absence of a view *is* the signal that it is gone. There is no
+terminal state to query — the event log is the record of what happened.
+
+**Order ids are opaque, not sequential.** `OrderManager` keeps orders in a pre-allocated slab
+and an id is `generation << 32 | slot index`, so a lookup is an array index rather than a
+hash. Freed slots are reused, and the per-slot generation is what stops a late or duplicate
+cancel from hitting whichever order now occupies the slot. Ids are 64-bit and never 0;
+arrival order lives in each `BookLevel`'s queue, not in the id. Storing an id in a 32-bit
+integer silently drops the generation and makes every lookup miss. Details and
+measurements: [`docs/optimization#3.md`](docs/optimization%233.md).
 
 **A modify may not preserve the order id.** Shrinking at the same price keeps the id and the
 queue position; a reprice, a quantity increase, or a side flip retires the order and books a
@@ -175,7 +209,7 @@ rather than divided, and it keeps the counters exact if `size_t` ever wraps.
 polymorphic hierarchy, which meant a `new` on the matching thread and a `delete` on the
 logger thread — a cross-thread free, the slow path in every general allocator, paid on both
 cores. Events are now flat structs in a `std::variant` carried by value, so a slot write is
-a 40-byte memcpy and nothing allocates. Three things had to change together for that to
+a 48-byte memcpy and nothing allocates. Three things had to change together for that to
 hold, and a `static_assert` on `is_trivially_copyable_v<EventVariant>` guards all of them:
 the virtual `push_to_file` had to go (a vptr per slot, and a non-trivial variant), the
 `std::string reason` on the reject events became a borrowed `const char*`, and the log
@@ -216,7 +250,7 @@ Honest list, since some of these look like features from the outside:
   in `push()` rather than allocating. That is backpressure instead of unbounded memory
   growth, but it does mean file I/O can now stall the producer — which `LockQueue` never
   did. 128 slots absorbs the burst from one sweeping order, not a long flush. Slots hold a
-  40-byte `EventVariant` by value now rather than an 8-byte pointer, so the ring is 5 KiB
+  48-byte `EventVariant` by value now rather than an 8-byte pointer, so the ring is 6 KiB
   rather than 1 KiB — still L1-resident, but it is the whole event, not a pointer to it.
 - **Reject reasons are borrowed, not owned.** `OrderRejected::reason` is a `const char*`,
   so every producer must pass a string literal or other static-storage text. Pointing it at

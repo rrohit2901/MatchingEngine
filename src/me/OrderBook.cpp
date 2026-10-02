@@ -7,15 +7,15 @@ OrderBook& OrderBook::operator=(const OrderBook& other) = default;
 OrderBook::OrderBook(OrderBook&& other) noexcept = default;
 OrderBook& OrderBook::operator=(OrderBook&& other) noexcept = default;
 
-std::vector<std::shared_ptr<BookLevel>> OrderBook::getBuySideView(int numLevels) const {
+std::vector<LevelView> OrderBook::getBuySideView(int numLevels) const {
     return buyLevels.getBookSideView(numLevels);
 }
 
-std::vector<std::shared_ptr<BookLevel>> OrderBook::getSellSideView(int numLevels) const {
+std::vector<LevelView> OrderBook::getSellSideView(int numLevels) const {
     return sellLevels.getBookSideView(numLevels);
 }
 
-std::pair<std::vector<std::shared_ptr<BookLevel>>, std::vector<std::shared_ptr<BookLevel>>> OrderBook::getOrderBookView(int numLevels) const {
+std::pair<std::vector<LevelView>, std::vector<LevelView>> OrderBook::getOrderBookView(int numLevels) const {
     return {buyLevels.getBookSideView(numLevels), sellLevels.getBookSideView(numLevels)};
 }
 
@@ -93,3 +93,7 @@ bool OrderBook::IsOrderValid(order_id_t order_id) const {
     return order_manager->valid(order_id);
 }
 
+std::optional<int> OrderBook::getBestPrice(OrderSide side) const {
+    if (side==OrderSide::BUY) return buyLevels.getTopPrice();
+    return sellLevels.getTopPrice();
+}

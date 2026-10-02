@@ -32,7 +32,7 @@ void BM_Cancel_LastOrderOnLevel(benchmark::State& state) {
         state.PauseTiming();
         // Distinct price each iteration so this order is the sole occupant of its level.
         const double price = kBasePrice + i++;
-        int id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        order_id_t id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         state.ResumeTiming();
 
         bool ok = book.cancelOrder(id);
@@ -61,7 +61,7 @@ void BM_Cancel_OneOfManyOnLevel(benchmark::State& state) {
             fill();
             added += kLevelDepth;
         }
-        int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        order_id_t id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         ++added;
         state.ResumeTiming();
 
@@ -87,7 +87,7 @@ void BM_Cancel_FromDeepBook(benchmark::State& state) {
         state.PauseTiming();
         // New level above the background book so the cancel tears its own level down.
         const double price = kBasePrice + kBookLevels + (i++ % kBookLevels);
-        int id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        order_id_t id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         state.ResumeTiming();
 
         bool ok = book.cancelOrder(id);

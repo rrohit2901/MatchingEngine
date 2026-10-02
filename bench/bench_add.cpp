@@ -26,7 +26,7 @@ void BM_Add_NewPriceLevel(benchmark::State& state) {
     int i = 0;
     for (auto _ : state) {
         const double price = kBasePrice + i++;  // strictly increasing -> always a new level
-        int id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        order_id_t id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         benchmark::DoNotOptimize(id);
     }
     state.SetItemsProcessed(state.iterations());
@@ -37,7 +37,7 @@ BENCHMARK(BM_Add_NewPriceLevel)->Unit(benchmark::kNanosecond);
 void BM_Add_ExistingPriceLevel(benchmark::State& state) {
     OrderBook book;
     for (auto _ : state) {
-        int id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        order_id_t id = book.addOrder(kBasePrice, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         benchmark::DoNotOptimize(id);
     }
     state.SetItemsProcessed(state.iterations());
@@ -50,7 +50,7 @@ void BM_Add_SpreadAcrossLevels(benchmark::State& state) {
     int i = 0;
     for (auto _ : state) {
         const double price = kBasePrice + (i++ % kPriceLevels);
-        int id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
+        order_id_t id = book.addOrder(price, kQuantity, OrderType::LIMIT, OrderSide::BUY);
         benchmark::DoNotOptimize(id);
     }
     state.SetItemsProcessed(state.iterations());
@@ -64,7 +64,7 @@ BENCHMARK(BM_Add_SpreadAcrossLevels)->Unit(benchmark::kNanosecond);
 void BM_Add_MarketOrder(benchmark::State& state) {
     OrderBook book;
     for (auto _ : state) {
-        int id = book.addOrder(kBasePrice, kQuantity, OrderType::MARKET, OrderSide::BUY);
+        order_id_t id = book.addOrder(kBasePrice, kQuantity, OrderType::MARKET, OrderSide::BUY);
         benchmark::DoNotOptimize(id);
     }
     state.SetItemsProcessed(state.iterations());
