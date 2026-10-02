@@ -17,7 +17,7 @@ if(NOT pybind11_FOUND)
     FetchContent_MakeAvailable(pybind11)
 endif()
 
-pybind11_add_module(_core MODULE module.cpp)
+pybind11_add_module(_core MODULE module.cpp replay_bindings.cpp)
 target_compile_features(_core PRIVATE cxx_std_20)
 
 # project_warnings is omitted for the reason bench/CMakeLists.txt already records:
@@ -30,6 +30,7 @@ target_compile_features(_core PRIVATE cxx_std_20)
 # all the hot code lives in me_core, which IS built with project_options.
 target_link_libraries(_core PRIVATE
     me_core
+    me_replay           # market data replay and validation
     me_ds_lock          # LockQueue
     me_event_handler    # Logger
     Threads::Threads

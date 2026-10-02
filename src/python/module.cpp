@@ -37,6 +37,9 @@
 
 namespace py = pybind11;
 
+// src/python/replay_bindings.cpp
+void bindReplay(py::module_& m);
+
 namespace {
 
 using EventQueue  = LockQueue<EventVariant>;
@@ -289,6 +292,7 @@ PYBIND11_MODULE(_core, m) {
     m.doc() = "Single-symbol C++ matching engine.";
 
     PyMatchingEngine::installForkHandlers();
+    bindReplay(m);
 
     py::enum_<OrderSide>(m, "OrderSide")
         .value("BUY", OrderSide::BUY)

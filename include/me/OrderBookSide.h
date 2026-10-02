@@ -170,4 +170,10 @@ class OrderBookSide {
             if (levels.empty()) return std::nullopt;
             return levels.back().getPrice();
         }
+
+        // Best level's price and size, without building a view vector.
+        std::optional<LevelView> getTopLevel() const {
+            if (levels.empty()) return std::nullopt;
+            return levels.back().getView();
+        }
 };

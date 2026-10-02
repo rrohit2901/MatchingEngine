@@ -201,6 +201,38 @@ Notes on the table:
   (target: exact match, apart from records flagged bad). Also check that the book never
   crosses.
 
+#### Phase 1 results: 2026-09-29 (done)
+**What was built**
+- `include/replay/MboEvents.h`: `MboEvents` and `Mbp1Events`, structs of column spans.
+- `MarketReplayer`: venue → engine id map, stats, and anomaly counters.
+- `ReplayValidator`: `validateAgainstMbp1`.
+- The `me_replay` CMake target.
+- `OrderBook::getTopLevel` (allocation-free).
+- Python: `matching_engine.replay` (Parquet → numpy; dtypes are checked and never copied
+  silently) and `_core.validate_replay`.
+- `scripts/validate_replay.py`.
+- Tests: 12 gtest cases (`tests/test_market_replayer.cpp`) and 4 pytest cases
+  (`tests/python/test_replay.py`).
+
+**Alignment.** Every `mbp-1` record carrying `F_LAST` has exactly the `(ts_recv,
+sequence)` key of an MBO event-end record, and those keys are unique. So the comparison
+is exact: there is no time-window matching.
+
+| symbol | records | top-of-book comparisons | mismatches | crossed | anomalies | replay + compare |
+|---|---:|---:|---:|---:|---:|---:|
+| AAPL | 5,027,491 | 809,283 | 0 | 0 | 0 | 7.2 s |
+| NVDA | 6,563,202 | 1,606,306 | 0 | 0 | 0 | 5.4 s |
+| TSLA | 2,549,255 | 431,039 | 0 | 0 | 0 | 3.4 s |
+
+**The rebuilt book equals Nasdaq's top of book, price and size, after every event that
+touched it.**
+
+Throughput is 0.7–1.2 M records/s. That's adequate for a backtester (a full day takes
+seconds), but well below what the book should do. Likely costs, not yet profiled:
+- the `unordered_map` id map, which allocates one node per add
+- `OrderBook::cancelOrder` resolving the order's side with extra lookups
+- levels shifting in a deep book
+
 ### Phase 2: simulator (C++)
 - **Simulation clock and event queue:** order latency and market-data latency, plus the
   10 ms strategy timer.

@@ -304,6 +304,7 @@ export DATABENTO_API_KEY=...
 python3 scripts/fetch_databento.py --date 2026-09-29          # quotes the cost, asks before downloading
 python3 scripts/convert_mbo.py --date 2026-09-29              # raw DBN -> Parquet, prices in 1e-4 $ ticks
 python3 scripts/inspect_mbo.py --date 2026-09-29 --symbol AAPL  # checks the MBO semantics the replay relies on
+python3 scripts/validate_replay.py --date 2026-09-29 --symbols AAPL NVDA TSLA  # replay vs Nasdaq's top of book
 ```
 
 The full replay and backtesting plan is in [`docs/strategy-replay-plan.md`](docs/strategy-replay-plan.md).

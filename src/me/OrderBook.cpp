@@ -97,3 +97,8 @@ std::optional<int> OrderBook::getBestPrice(OrderSide side) const {
     if (side==OrderSide::BUY) return buyLevels.getTopPrice();
     return sellLevels.getTopPrice();
 }
+
+std::optional<LevelView> OrderBook::getTopLevel(OrderSide side) const {
+    if (side==OrderSide::BUY) return buyLevels.getTopLevel();
+    return sellLevels.getTopLevel();
+}
