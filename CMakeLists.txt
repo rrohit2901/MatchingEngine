@@ -24,9 +24,10 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # -----------------------------------------------------------------------------
-# Build options. Every default reproduces the historical build exactly, so
+# Build options. With the defaults,
 #   cmake -S . -B build && cmake --build build && ctest --test-dir build
-# is unaffected by their existence. The wheel build (scikit-build-core, see
+# builds and tests everything except the Python extension. ME_LTO changes how
+# Release code is optimized, not what is built. The wheel build (scikit-build-core, see
 # pyproject.toml) turns tests/bench/apps off and python on, so `pip install .`
 # never clones googletest or benchmark.
 # -----------------------------------------------------------------------------
@@ -65,8 +66,9 @@ target_compile_options(project_options INTERFACE
 # OrderManager.cpp, BookLevel.cpp and OrderBook.cpp, and MatchingEngine.h is a
 # template instantiated in whichever TU uses it, so without LTO every getView /
 # resolve / valid on that path is an out-of-line call the compiler cannot see
-# through. Measured on bench_latency against the non-LTO build: OrderBook modify
-# and cancel P50 roughly halve, and Engine add P50 drops by about half.
+# through. Measured with bench_latency against the non-LTO build in
+# docs/optimization#4.md: Engine add, modify and cancel P50 roughly halve, and
+# OrderBook modify and cancel drop by 20-50% depending on the session.
 #
 # Set before FetchContent so every target, dependencies included, is built the
 # same way; that is the configuration the numbers above were taken with. Debug

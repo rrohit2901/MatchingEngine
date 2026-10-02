@@ -11,32 +11,54 @@ ones that are unflattering.
 
 ## Performance
 
-300k samples per operation, `-O3 -march=native`, on a 12th-gen i7-1250U (WSL2), pinned to
-the two hyperthreads of one core (`taskset -c 6,7` cool, `2,3` sustained — equivalent
-pairs under WSL2). Every figure includes one `steady_clock::now()`
-pair — subtract it. Deeper tail percentiles, and why they are not trustworthy on this
-machine, are in [`bench/README.md`](bench/README.md).
+300k samples per operation, `-O3 -march=native` with LTO, on a 12th-gen i7-1250U (WSL2),
+pinned to the two hyperthreads of one core (`taskset -c 6,7`). Median of three runs, taken
+interleaved with the previous `main` in one session. Every figure includes one
+`steady_clock::now()` pair — subtract it. Deeper tail percentiles, and why they are not
+trustworthy on this machine, are in [`bench/README.md`](bench/README.md).
 
-This laptop CPU throttles under sustained load and the numbers move with it, so both states
-are shown. **Cool** is a single run on an idle machine (timer overhead 20 ns). **Sustained**
-is the median of three runs taken after ~40 minutes of continuous benchmarking (timer
-overhead 36 ns). Same binary in both columns.
-
-| operation | P50 cool | P99 cool | P50 sustained | P99 sustained |
-|---|---:|---:|---:|---:|
-| OrderBook add | 39 ns | 148 ns | 67 ns | 148 ns |
-| OrderBook modify | 98 ns | 142 ns | 179 ns | 355 ns |
-| OrderBook cancel | 64 ns | 85 ns | 116 ns | 218 ns |
-| Engine add | 201 ns | 269 ns | 398 ns | 640 ns |
-| Engine modify | 528 ns | 893 ns | 521 ns | 905 ns |
-| Engine cancel | 247 ns | 409 ns | 238 ns | 413 ns |
+| operation | P50 | P99 |
+|---|---:|---:|
+| OrderBook add | 58 ns | 95 ns |
+| OrderBook modify | 91 ns | 131 ns |
+| OrderBook cancel | 68 ns | 102 ns |
+| Engine add | 169 ns | 281 ns |
+| Engine modify | 278 ns | 444 ns |
+| Engine cancel | 117 ns | 294 ns |
 
 `OrderBook` rows are the book in isolation. `Engine` rows add risk checks, matching, and
-event publishing. The timer overhead printed by `bench_latency` is the quickest way to tell
-which state a run was taken in. Engine P50s also swing by ~100 ns from run to run within a
-state, so compare builds by running them interleaved, never one after the other.
+event publishing.
 
-**Orders live in a slab, not a hash map.** `OrderManager` used to be an
+**These are warm-machine numbers.** This laptop CPU throttles under sustained load (timer
+overhead was 19–42 ns across these runs), and on a cool, idle machine the same binary reads
+noticeably lower. Before LTO, a cool run measured the book rows up to 1.8x below the
+throttled median ([`bench/README.md`](bench/README.md)). The timer overhead printed by
+`bench_latency` is the quickest way to tell which state a run was taken in. Engine P50s also
+swing by ~100 ns from run to run within a state, so compare builds by running them
+interleaved, never one after the other.
+
+**Link-time optimization, and a matcher that skips work it doesn't need.** The order path is
+split across `OrderManager.cpp`, `BookLevel.cpp` and `OrderBook.cpp`. Without LTO, the small
+helpers called several times per operation were out-of-line calls; Release builds now use
+LTO (`ME_LTO`, on by default). `Matcher::tryMatch` also used to rewrite every incoming order
+with a full `modifyOrder`, even when nothing could trade. It now returns early when the
+opposite best doesn't cross, and reuses its trade buffer. Against the previous `main`,
+interleaved, median of three:
+
+| operation | P50 | P99 |
+|---|---:|---:|
+| OrderBook modify | 114 → 91 ns | 166 → 131 ns |
+| OrderBook cancel | 85 → 68 ns | 137 → 102 ns |
+| Engine add | 278 → 169 ns | 536 → 281 ns |
+| Engine modify | 531 → 278 ns | 914 → 444 ns |
+| Engine cancel | 250 → 117 ns | 416 → 294 ns |
+
+Nearly all of this is LTO. The matcher change could not be separated from noise in this
+session, and no benchmark yet exercises orders that cross. Details and the per-change
+breakdown: [`docs/optimization#4.md`](docs/optimization%234.md).
+
+**Orders live in a slab, not a hash map** (previous change, 2026-10-02, measured before
+LTO). `OrderManager` used to be an
 `unordered_map<id, unique_ptr<Order>>`, which meant two heap allocations per add and three
 dependent pointer loads per lookup. It is now a pre-allocated vector of 32-byte slots with
 an intrusive free list, and an order id encodes its slot, so a lookup is an index plus a
@@ -85,15 +107,18 @@ which is what makes the P50 column above a fair comparison. Their **P99s are 1.2
 worse** than the earlier run (188/289/251 before, 220/485/333 after), so the machine was having
 a worse tail day than the baseline: the P99 improvements are understated, not flattered.
 
-**Where an engine add goes.** The book is not the bottleneck, and neither is the queue:
+**Where an engine add goes.** An engine add is the book add, the risk check, one event
+publish, and `tryMatch`. For a passive order, `tryMatch` is now one lookup and a
+best-price comparison:
 
 | component | P50 |
 |---|---:|
-| `OrderBook::addOrder` | 67 ns |
-| publish one event (construct in variant + ring push; 2026-09-11) | 77 ns |
+| `OrderBook::addOrder` | 58 ns |
+| publish one event (construct in variant + ring push; measured 2026-09-11, before LTO) | 77 ns |
 
-Matching accounts for most of the balance: `tryMatch` performs a modify-shaped book mutation
-even when nothing crosses, and that is now the largest single component of an engine add.
+Until the matcher change, `tryMatch` rewrote every incoming order with a full
+`modifyOrder`, even when nothing crossed, and that was the largest single component of an
+engine add.
 
 Full methodology, caveats, and the Google Benchmark suites: [`bench/README.md`](bench/README.md).
 
@@ -280,7 +305,8 @@ bench/                   Google Benchmark suites + latency harness
 scripts/                 Databento market data download, conversion, inspection, validation
 ```
 
-Build options — all default to the historical build, so a plain configure is unchanged:
+Build options. A plain configure builds everything except the Python extension, with LTO and
+`-march=native` in Release:
 
 | option | default | effect |
 |---|---|---|
@@ -289,6 +315,7 @@ Build options — all default to the historical build, so a plain configure is u
 | `ME_BUILD_APPS` | ON | `me_main` demo |
 | `ME_BUILD_PYTHON` | OFF | pybind11 extension |
 | `ME_NATIVE_ARCH` | ON | `-march=native` in Release |
+| `ME_LTO` | ON | link-time optimization in Release; skipped with a status message if the toolchain can't do it |
 
 `pip install .` turns tests, benchmarks and apps off, so a wheel build clones neither
 dependency.

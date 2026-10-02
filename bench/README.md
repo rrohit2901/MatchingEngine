@@ -20,14 +20,14 @@ taskset -c 6,7 ./build-release/bench/bench_latency 300000
 
 | | |
 |---|---|
-| Date | 2026-10-02 |
-| Commit | `cfe9360` + slab `OrderManager` ([optimization #3](../docs/optimization%233.md)) |
+| Date | 2026-10-03 |
+| Commit | `68b2746`: LTO + `tryMatch` fast path ([optimization #4](../docs/optimization%234.md)) |
 | CPU | 12th Gen Intel Core i7-1250U (12 threads) |
 | Compiler | g++ 11.4.0 |
-| Build | Release — `-O3 -march=native -DNDEBUG` |
+| Build | Release — `-O3 -march=native -DNDEBUG`, LTO (`ME_LTO=ON`, the default) |
 | Samples | 300,000 per operation |
-| Timer overhead | 20 ns (cool run) / ~36 ns (sustained runs) per `steady_clock::now()` pair — subtract from every figure |
-| Runs | one cool run; sustained = median of 3, interleaved with the previous commit (see below) |
+| Timer overhead | 19–42 ns per `steady_clock::now()` pair across these runs (warm machine) — subtract from every figure |
+| Runs | median of 3, interleaved with the previous `main` and an LTO-only build (see below) |
 
 ### Measurement caveats, learned the hard way
 
@@ -45,20 +45,18 @@ event path, so if they move between two runs, the machine moved, not the code.
 That check is what caught the problem: an earlier draft of this table showed
 `OrderBook add` P99 going 188 -> 565 ns on code that had not been edited at all.
 
-**How the current figures were taken (2026-10-02).** This change touched the
-`OrderBook` rows themselves, so they couldn't serve as the control. Instead
-the previous commit and this one were built side by side and run
-**interleaved**, base/new/base/new for three rounds, so both builds see the
-same thermal drift. Every figure below is the median of that build's three
-runs. Even so, the `Engine` P50s were bimodal in *both* builds (near ~290 or
-~400 ns depending on the run), and the new build's timer overhead read 36 ns
-in all three runs against 26/35/35 for the base. Treat `Engine` deltas under
-~100 ns as noise. The before/after comparison is in
-[`docs/optimization#3.md`](../docs/optimization%233.md).
+**How the current figures were taken (2026-10-03).** Three builds were run
+**interleaved**, three rounds of `main` (`8454e53`) → LTO only (`eb5fc46`) →
+this commit, so all three see the same thermal drift. Every figure below is the
+median of that build's three runs. A 5-minute idle beforehand did not produce a
+cool run: the first run still read 38 ns timer overhead. So unlike the previous
+update there is no cool-machine table for this build, and the figures are
+warm-machine figures. The three-way comparison is in
+[`docs/optimization#4.md`](../docs/optimization%234.md).
 
-(The previous update, for the allocation-free event queue, used a single run
-chosen because its `OrderBook` controls matched the earlier baseline within
-4%. That was valid then because that change did not touch the book.)
+(Earlier updates used the same interleaving for the slab change, 2026-10-02,
+and a single run with the `OrderBook` rows as a control for the allocation-free
+event queue, which did not touch the book.)
 
 Two cores, not one: the engine rows run a producer thread and a draining consumer
 thread, so pinning to a single core makes `RingBuffer::push` spin against a
@@ -89,7 +87,13 @@ noise. The figures below stand.
 
 All values in nanoseconds.
 
-### Cool machine (single run, idle beforehand, timer overhead 20 ns, `taskset -c 6,7`)
+### Cool vs warm, previous build (2026-10-02, before LTO)
+
+Kept because it is the only cool-machine measurement there is, and it shows how
+large the thermal effect is on this laptop. **These are not the current
+binary's numbers**; see the next table for those.
+
+Single cool run, idle beforehand, timer overhead 20 ns, `taskset -c 6,7`:
 
 | operation | P50 | P99 | P99.9 | mean |
 |---|---:|---:|---:|---:|
@@ -106,29 +110,31 @@ All values in nanoseconds.
 Three back-to-back runs started from idle show the drift directly. Timer
 overhead went 24 → 27 → 28 ns, `OrderBook add` P50 went 45 → 49 → 49, and
 `OrderBook modify` P50 went 106 → 132 → 132. After ~40 minutes of continuous
-load the figures settle at the sustained table below. Engine modify is the
-one row that barely moves between states (528 cool vs 521 sustained), and
-it varied 262–555 across those three runs, so it is mostly run-to-run noise.
+load, that build settled at OrderBook add/modify/cancel P50 67/179/116 and
+Engine add/modify/cancel 398/521/238 (median of 3, timer overhead ~36 ns).
+Engine modify barely moved between states (528 cool vs 521 warm) and varied
+262–555 across those three runs, so that row is mostly run-to-run noise.
 
-### Sustained load (median of 3, timer overhead ~36 ns, `taskset -c 2,3`)
+### Current (2026-10-03, LTO + fast path, median of 3, warm, `taskset -c 6,7`)
 
 | operation | P50 | P99 | P99.9 | mean |
 |---|---:|---:|---:|---:|
-| OrderBook add | 67 | 148 | 591 | 100 |
-| OrderBook modify | 179 | 355 | 429 | 203 |
-| OrderBook cancel | 116 | 218 | 255 | 129 |
-| Engine add `[LockQueue]` | 577 | 5,092 | 44,478 | 1,162 |
-| Engine add `[RingBuf/128]` | 398 | 640 | 2,422 | 505 |
-| Engine modify `[LockQueue]` | 609 | 4,351 | 36,201 | 1,147 |
-| Engine modify `[RingBuf/128]` | 521 | 905 | 2,679 | 579 |
-| Engine cancel `[LockQueue]` | 434 | 4,081 | 33,803 | 930 |
-| Engine cancel `[RingBuf/128]` | 238 | 413 | 621 | 294 |
+| OrderBook add | 58 | 95 | 453 | 79 |
+| OrderBook modify | 91 | 131 | 184 | 96 |
+| OrderBook cancel | 68 | 102 | 120 | 75 |
+| Engine add `[LockQueue]` | 427 | 3,869 | 22,863 | 856 |
+| Engine add `[RingBuf/128]` | 169 | 281 | 895 | 179 |
+| Engine modify `[LockQueue]` | 429 | 3,960 | 22,864 | 900 |
+| Engine modify `[RingBuf/128]` | 278 | 444 | 683 | 310 |
+| Engine cancel `[LockQueue]` | 402 | 3,256 | 19,122 | 750 |
+| Engine cancel `[RingBuf/128]` | 117 | 294 | 394 | 187 |
 
-Against the previous commit, run interleaved in the same session (median of
-three runs each), the `OrderBook` rows moved add 117 → 67, modify 216 → 179,
-cancel 136 → 116 at P50, and add 1,820 → 591 at P99.9. The slab removed both
-per-order heap allocations from add. The `Engine` rows were within noise; see
-the note above.
+Against the previous `main`, interleaved in the same session: OrderBook modify
+114 → 91 and cancel 85 → 68 at P50, Engine add 278 → 169, modify 531 → 278 and
+cancel 250 → 117. OrderBook add did not move (50 → 58 at P50, 126 → 95 at P99).
+Nearly all of the gain is LTO. The `tryMatch` fast path could not be separated
+from noise in this session, and none of these benchmarks has an order that
+crosses.
 
 `OrderBook` rows measure the book in isolation. `Engine` rows are the same
 operation through `MatchingEngine`, which adds risk checks, event publishing and
@@ -169,11 +175,12 @@ runs of each binary, interleaved so both see the same machine conditions:
   2,892 -> 641 ns, against 111 -> 77 ns at P50. That ratio is the signature of an
   allocator leaving the path: the median cost of `malloc` on a hot free list is
   modest, but its tail — a refill, a slow-path arena lock — is not.
-- **Matching costs a second book mutation.** `tryMatch` runs `getOrderView` +
-  `fillOrders` + `modifyOrder` even when nothing crosses, so
-  Engine add ~= book add (84 then, 67 now) + publish (77, not re-measured) + a
-  modify-shaped operation, and matching is now comfortably the largest single
-  component.
+- **Matching no longer costs a second book mutation.** Until optimization #4,
+  `tryMatch` ran `getOrderView` + `fillOrders` + a full `modifyOrder` even when
+  nothing crossed, and that was the largest single component of an engine add.
+  It now returns after one lookup and a best-price comparison when the opposite
+  side doesn't cross. Engine add ≈ book add (58) + publish (77, measured before
+  LTO and not re-measured) + risk check + that early exit.
 
 Not re-measured for this change: `RiskManager::runAllChecks` was previously timed
 at 28 ns, which was inside timer noise then and has not been touched since.
@@ -187,14 +194,14 @@ and a control run with a **2-slot** ring matched 65,536:
 
 | Engine add | P50 | P99 | P99.9 | mean |
 |---|---:|---:|---:|---:|
-| `RingBuf/128` | 398 | 640 | 2,422 | 505 |
-| `RingBuf/1K` | 400 | 682 | 1,372 | 461 |
-| `RingBuf/8K` | 415 | 718 | 1,632 | 496 |
-| `RingBuf/64K` | 390 | 735 | 1,843 | 480 |
+| `RingBuf/128` | 169 | 281 | 895 | 179 |
+| `RingBuf/1K` | 161 | 238 | 634 | 185 |
+| `RingBuf/8K` | 172 | 298 | 750 | 209 |
+| `RingBuf/64K` | 167 | 312 | 829 | 184 |
 
 (Same runs as the table above, median of three. The `RingBuf/2` control row was
 from the earlier `unique_ptr` build and is not re-measured here. The conclusion
-is unchanged: the P50 spread across a 512x range of capacities is about 6%.)
+is unchanged: the P50 spread across a 512x range of capacities is about 7%.)
 
 That is not surprising once you look at the drain thread: it discards events and
 does no I/O, so it never falls behind, the ring sits near-empty, and `push()`
@@ -211,28 +218,31 @@ measured against a stall.
 ## Google Benchmark suites
 
 Mean ns/op, `--benchmark_min_time=0.5s`. Range across two runs, interleaved with
-the previous commit's build (its ranges are in
-[`docs/optimization#3.md`](../docs/optimization%233.md)); they overlap on most rows.
+the previous `main`'s build:
 
-| benchmark | ns |
-|---|---:|
-| `BM_Add_NewPriceLevel` | 1,370–1,812 |
-| `BM_Add_ExistingPriceLevel` | 90–100 |
-| `BM_Add_SpreadAcrossLevels` | 85–96 |
-| `BM_Add_MarketOrder` | 56–73 |
-| `BM_Cancel_LastOrderOnLevel` | 334–541 |
-| `BM_Cancel_OneOfManyOnLevel` | 534–547 |
-| `BM_Cancel_FromDeepBook` | 495–555 |
-| `BM_Modify_QuantityOnly` | 1,147–1,253 |
-| `BM_Modify_ChangePriceLevel` | 839–1,031 |
-| `BM_Modify_ChangeSide` | 713–956 |
+| benchmark | previous `main` | current |
+|---|---:|---:|
+| `BM_Add_NewPriceLevel` | 1,555–1,611 | 2,240–2,287 |
+| `BM_Add_ExistingPriceLevel` | 80–86 | 85–138 |
+| `BM_Add_SpreadAcrossLevels` | 103–114 | 74–78 |
+| `BM_Add_MarketOrder` | 83 | 54–58 |
+| `BM_Cancel_LastOrderOnLevel` | 465–536 | 413 |
+| `BM_Cancel_OneOfManyOnLevel` | 462–473 | 396–407 |
+| `BM_Cancel_FromDeepBook` | 502–516 | 389–416 |
+| `BM_Modify_QuantityOnly` | 1,036–1,390 | 715–717 |
+| `BM_Modify_ChangePriceLevel` | 713–929 | 600–637 |
+| `BM_Modify_ChangeSide` | 807–1,013 | 621–688 |
+
+Every cancel and modify row is lower in both runs. `BM_Add_NewPriceLevel` reads
+about 40% worse; see caveat 2 below for why that benchmark can't be compared
+between builds. `bench_latency` shows no add regression.
 
 **Treat these as much softer than the `bench_latency` numbers.** Two known
 methodology problems, neither fixed:
 
 1. `bench_modify` and `bench_cancel` call `PauseTiming()`/`ResumeTiming()` every
    iteration, which costs more than the operation being measured. That is why
-   cancel reads ~500 ns here and 150 ns in `bench_latency`. Batch the setup to
+   cancel reads ~400 ns here and ~70 ns in `bench_latency`. Batch the setup to
    fix it.
 2. `BM_Add_NewPriceLevel` and `BM_Add_ExistingPriceLevel` grow the book without
    bound while Google Benchmark chooses iteration counts adaptively, so their
