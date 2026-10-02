@@ -8,6 +8,7 @@
 #include <map>
 #include <type_traits>
 #include <limits>
+#include <ranges>
 
 template<OrderSide side>
 class OrderBookSide {
@@ -50,14 +51,12 @@ class OrderBookSide {
         }
 
         std::vector<std::shared_ptr<BookLevel>> getBookSideView(unsigned numLevels = 1) const {
-            std::vector<std::shared_ptr<BookLevel>> levels;
-            for (const auto& [price, level] : priceLevels) {
-                if (levels.size() >= numLevels) {
-                    break;
-                }
-                levels.push_back(level);
-            }
-            return levels;
+            auto view = priceLevels 
+                    | std::views::values 
+                    | std::views::take(numLevels)
+                    | std::views::common;
+
+            return {view.begin(), view.end()};
         }
 
         order_id_t addOrder(OrderType type, int price, int quantity) {
@@ -125,5 +124,10 @@ class OrderBookSide {
                 }
             }
             return qty;
+        }
+
+        std::optional<int> getTopPrice() const {
+            if (priceLevels.empty()) return std::nullopt;
+            return (priceLevels.begin())->first;
         }
 };

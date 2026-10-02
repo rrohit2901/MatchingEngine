@@ -93,3 +93,7 @@ bool OrderBook::IsOrderValid(order_id_t order_id) const {
     return order_manager->valid(order_id);
 }
 
+std::optional<int> OrderBook::getBestPrice(OrderSide side) const {
+    if (side==OrderSide::BUY) return buyLevels.getTopPrice();
+    return sellLevels.getTopPrice();
+}

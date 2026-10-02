@@ -12,12 +12,9 @@ class BookLevel {
     private:
         int total_quantity;
         int price;
-        int total_orders;
-        int valid_orders;
         std::shared_ptr<OrderManager> order_manager;
         std::vector<order_id_t> orders;
 
-        void compact();
     public:
         BookLevel();
         BookLevel(std::shared_ptr<OrderManager>& order_manager, int price);

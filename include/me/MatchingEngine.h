@@ -51,9 +51,7 @@ MatchingEngine<InputCont, T>::~MatchingEngine() {
 template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
 std::optional<order_id_t> MatchingEngine<InputCont, T>::addOrder(int price, int quantity, OrderType type, OrderSide side) {
-    const auto book_top = side==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
-    std::optional<int> top_book_price = std::nullopt;
-    if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
+    std::optional<int> top_book_price = order_book->getBestPrice(side);
 
     if (const RejectReason reason = risk_manager.checkOrder(price, quantity, top_book_price);
         reason != RejectReason::NONE) {
@@ -92,9 +90,7 @@ template<template<typename> class InputCont, typename T>
 requires validInputContConsumer<InputCont<T>, T>
 std::optional<order_id_t> MatchingEngine<InputCont, T>::modifyOrder(order_id_t orderId, int newQuantity, int newPrice, OrderSide newSide, OrderType type) {
     // The modified order is checked against the side and price it is moving TO.
-    const auto book_top = newSide==OrderSide::BUY ? order_book->getBuySideView(1) : order_book->getSellSideView(1);
-    std::optional<int> top_book_price = std::nullopt;
-    if(!book_top.empty() && book_top[0]) top_book_price = book_top[0]->getPrice();
+    std::optional<int> top_book_price = order_book->getBestPrice(newSide);
 
     if (const RejectReason reason = risk_manager.checkOrder(newPrice, newQuantity, top_book_price);
         reason != RejectReason::NONE) {

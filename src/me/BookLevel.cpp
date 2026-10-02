@@ -2,8 +2,12 @@
 #include "Order.h"
 #include <ranges>
 
-BookLevel::BookLevel() : total_quantity(0), price(0), total_orders(0), valid_orders(0) {}
-BookLevel::BookLevel(std::shared_ptr<OrderManager>& order_manager, int price) : total_quantity(0), price(price), total_orders(0), valid_orders(0), order_manager(order_manager) {}
+BookLevel::BookLevel() : total_quantity(0), price(0) {
+    orders.reserve(512);
+}
+BookLevel::BookLevel(std::shared_ptr<OrderManager>& order_manager, int price) : total_quantity(0), price(price), order_manager(order_manager) {
+    orders.reserve(512);
+}
 
 BookLevel::~BookLevel() = default;
 BookLevel::BookLevel(const BookLevel& other) = default;
@@ -34,16 +38,14 @@ int BookLevel::getPrice() const {
 order_id_t BookLevel::addOrder(OrderSide side, OrderType type, int price, int quantity) {
     order_id_t order_id = order_manager->add_order(side, type, quantity, price);
     total_quantity += quantity;
-    total_orders += 1;
-    valid_orders += 1;
     orders.push_back(order_id);
-    return orders.back();
+    return order_id;
 }
 
 std::optional<order_id_t> BookLevel::modifyOrder(order_id_t order_id, int new_quantity, int new_price) {
     // One lookup covers the validity check and every field used below.
     const auto order = order_manager->getView(order_id);
-    if (!order) return std::nullopt;
+    if (!order) [[unlikely]] return std::nullopt;
 
     // Signed comparison: current_quantity used to be unsigned, which turned a
     // negative new_quantity into a huge value and took the wrong branch.
@@ -57,9 +59,6 @@ std::optional<order_id_t> BookLevel::modifyOrder(order_id_t order_id, int new_qu
     // Return value is ignored because here we know order_id corresponds to a valid order.
     cancelOrder(order_id);
 
-    // Handling case where order is modified to have 0 quantity
-    if(!order_manager->valid(modified_order_id)) valid_orders -= 1;
-
     return modified_order_id;
 }
 
@@ -67,11 +66,9 @@ bool BookLevel::cancelOrder(order_id_t order_id) {
     const auto order = order_manager->getView(order_id);
     if (!order) return false;
     total_quantity -= order->quantity;
-    valid_orders -= 1;
-
     order_manager->cancel_order(order_id);
-    // Run check to remove cancelled/filled orders
-    compact();
+    auto it = lower_bound(orders.begin(), orders.end(), order_id);
+    if (it != orders.end() && *it == order_id) [[likely]] orders.erase(it);
     return true;
 }
 
@@ -81,23 +78,14 @@ int BookLevel::fillOrders(int qty, std::vector<TradeEvent>& filled_orders, order
         // Nothing left to match against this level's remaining orders.
         if(rem_qty==0) break;
 
+        int orig_qty = rem_qty;
         const auto order = order_manager->getView(order_id);
-        if(!order) continue;
+        if(!order) [[unlikely]] continue;
 
         rem_qty = order_manager->fulfill_order(order_id, rem_qty);
 
-        const auto post_match_order = order_manager->getView(order_id);
-        const int price = order->price;
-
-        int filled_qty = 0;
-        if(!post_match_order) {
-            // The resting order is gone, so all of it traded.
-            valid_orders -= 1;
-            filled_qty = order->quantity;
-        }
-        else{
-            filled_qty = order->quantity - post_match_order->quantity;
-        }
+        int price = order->price;
+        int filled_qty = orig_qty - rem_qty;
         if(filled_qty==0) continue;
 
         // 0 is a transient value for order ID.
@@ -107,20 +95,7 @@ int BookLevel::fillOrders(int qty, std::vector<TradeEvent>& filled_orders, order
 
         filled_orders.emplace_back(buy_order_id, sell_order_id, price, filled_qty);
     }
+    std::erase_if(orders, [&](order_id_t order_id) { return !order_manager->valid(order_id); });
     total_quantity = std::max(0, total_quantity - qty);
-    // Run check to remove cancelled/filled orders
-    compact();
     return rem_qty;
-}
-
-void BookLevel::compact() {
-    if (valid_orders > 0.2*total_orders) return;
-
-    auto valid_orders_v = orders | std::views::filter([&](order_id_t order_id){return order_manager->valid(order_id);});
-    std::vector<order_id_t> valid_orders;
-    for(order_id_t order_id: valid_orders_v) {
-        valid_orders.push_back(order_id);
-    }
-    orders = std::move(valid_orders);
-    total_orders = this->valid_orders = orders.size();
 }

@@ -32,6 +32,8 @@ class OrderBook {
         // Preferred accessor: one OrderManager lookup for every field.
         std::optional<OrderView> getOrderView(order_id_t order_id) const;
 
+        std::optional<int> getBestPrice(OrderSide side) const;
+
         std::optional<OrderSide> getOrderSide(order_id_t order_id) const;
         std::optional<OrderType> getOrderType(order_id_t order_id) const;
         std::optional<int> getOrderPrice(order_id_t order_id) const;

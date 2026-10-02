@@ -65,7 +65,7 @@ bool Order::cancel() {
 }
 
 int Order::fulfill(int qty) {
-    if (!valid()) {
+    if (!valid()) [[unlikely]] {
         return qty;
     }
     if(qty>=view.quantity) {
