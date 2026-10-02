@@ -12,7 +12,6 @@ Environment:
 
 from __future__ import annotations
 
-import io
 import os
 import sys
 import threading
@@ -239,12 +238,56 @@ def show_error(result: RunResult) -> None:
             st.code(result.log, language="text")
 
 
+CHART_POINTS = 1_500
+
+
+def money(x: float) -> str:
+    """Short enough for a metric tile at any normal zoom: $1,234.56, $24.3k, $502.1M."""
+    sign, v = ("-" if x < 0 else ""), abs(x)
+    if v >= 1e6:
+        return f"{sign}${v / 1e6:,.1f}M"
+    if v >= 1e4:
+        return f"{sign}${v / 1e3:,.1f}k"
+    return f"{sign}${v:,.2f}"
+
+
+def count(n: float) -> str:
+    v = abs(n)
+    if v >= 1e6:
+        return f"{n / 1e6:,.1f}M"
+    if v >= 1e4:
+        return f"{n / 1e3:,.1f}k"
+    return f"{n:,}"
+
+
+def thin(frame: pd.DataFrame, points: int = CHART_POINTS) -> pd.DataFrame:
+    """At most `points` evenly spaced rows (always keeping the last): a day of 1 s
+    samples is ~23k rows, far more than a chart's width can show, and slow to draw."""
+    if len(frame) <= points:
+        return frame
+    step = -(-len(frame) // points)
+    return pd.concat([frame.iloc[::step], frame.iloc[[-1]]]).drop_duplicates(subset="ts")
+
+
+def prepared(result: RunResult) -> dict:
+    """The heavier derived data for a result, built once and kept with it, not on every rerun."""
+    cache = st.session_state.setdefault("prepared", {})
+    key = id(result)
+    if key not in cache:
+        cache.clear()
+        equity = pd.DataFrame(result.result["equity"], columns=["ts", "position", "cash", "mid", "equity"])
+        equity["time"] = ny(equity["ts"])
+        cache[key] = {"equity": thin(equity)}
+    return cache[key]
+
+
 def show_result(result: RunResult) -> None:
     if not result.ok:
         show_error(result)
         return
     r = result.result
     s, cfg = r["summary"], r["config"]
+    data = prepared(result)
     st.subheader(f"{r['strategy']['name']} on {cfg['symbol']}, {cfg['date']}")
     st.caption(f"Window {cfg['start']}–{cfg['end']} New York · timer {cfg['timer_ms']:g} ms · latency "
                f"{cfg['order_latency_us']:g} + {cfg['md_latency_us']:g} µs · passive impact "
@@ -252,24 +295,21 @@ def show_result(result: RunResult) -> None:
                f"{'on' if cfg['self_trade_prevention'] else 'off'} · run {result.run_s:.1f} s, "
                f"waited {result.queue_wait_s:.1f} s, peak {result.peak_mb} MB")
 
-    cols = st.columns(6)
-    cols[0].metric("PnL (marked to mid)", f"${s['pnl']:,.2f}")
-    cols[1].metric("Max drawdown", f"${s['max_drawdown']:,.2f}")
-    cols[2].metric("Final position", f"{s['final_position']:,} sh")
-    cols[3].metric("Fills", f"{s['fills']:,}")
-    cols[4].metric("Fill ratio", f"{s['fill_ratio']:.1%}")
-    cols[5].metric("Maker share", f"{s['maker_share']:.1%}")
-    cols = st.columns(6)
-    cols[0].metric("Fees", f"${s['fees']:,.2f}")
-    cols[1].metric("Bought / sold", f"{s['bought']:,} / {s['sold']:,}")
-    cols[2].metric("Notional traded", f"${s['notional']:,.0f}")
-    cols[3].metric("Orders", f"{s['orders']:,}")
-    cols[4].metric("Rejected", f"{s['rejected']:,}")
-    cols[5].metric("Max long / short", f"{s['max_long']:,} / {s['max_short']:,}")
+    cols = st.columns(4)
+    cols[0].metric("PnL (marked to mid)", money(s["pnl"]))
+    cols[1].metric("Max drawdown", money(s["max_drawdown"]))
+    cols[2].metric("Final position", f"{count(s['final_position'])} sh")
+    cols[3].metric("Fills", count(s["fills"]))
+    cols = st.columns(4)
+    cols[0].metric("Fill ratio", f"{s['fill_ratio']:.1%}")
+    cols[1].metric("Maker share", f"{s['maker_share']:.1%}")
+    cols[2].metric("Fees", money(s["fees"]))
+    cols[3].metric("Orders (rejected)", f"{count(s['orders'])} ({count(s['rejected'])})")
+    st.caption(f"Bought {s['bought']:,} and sold {s['sold']:,} shares · notional {money(s['notional'])} · "
+               f"max long {s['max_long']:,} / short {s['max_short']:,} shares · exact PnL ${s['pnl']:,.2f}")
 
-    equity = pd.DataFrame(r["equity"], columns=["ts", "position", "cash", "mid", "equity"])
+    equity = data["equity"]
     if not equity.empty:
-        equity["time"] = ny(equity["ts"])
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Equity ($, marked to mid)**")
@@ -298,18 +338,17 @@ def show_result(result: RunResult) -> None:
         stats = r["stats"]
         rows = [(name, f"{stats[name]:,}", meaning) for name, meaning in RECONCILIATION]
         rows.append(("venue_anomalies", f"{r['venue_anomalies']:,}", "Real records the replay could not apply. Should be 0."))
-        st.dataframe(pd.DataFrame(rows, columns=["counter", "value", "meaning"]), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows, columns=["counter", "value", "meaning"]), hide_index=True, width="stretch")
 
-    fills = pd.read_csv(io.BytesIO(result.fills_csv))
-    orders = pd.read_csv(io.BytesIO(result.orders_csv))
-    tab_fills, tab_orders, tab_more = st.tabs([f"Fills ({len(fills):,})", f"Orders ({len(orders):,})", "Run details"])
-    with tab_fills:
-        st.dataframe(fills.head(1_000), hide_index=True, use_container_width=True)
-        st.download_button("Download all fills (CSV)", result.fills_csv, "fills.csv", "text/csv")
-    with tab_orders:
-        st.dataframe(orders.head(1_000), hide_index=True, use_container_width=True)
-        st.download_button("Download all orders (CSV)", result.orders_csv, "orders.csv", "text/csv")
-    with tab_more:
+    # Fills and orders are downloads only: tables of tens of thousands of rows made the
+    # page sluggish. Downloading doesn't rerun the page (on_click="ignore").
+    c1, c2, _ = st.columns([1, 1, 2])
+    c1.download_button(f"Download fills ({s['fills']:,}) as CSV", result.fills_csv, "fills.csv", "text/csv",
+                       on_click="ignore", width="stretch")
+    c2.download_button(f"Download orders ({s['orders']:,}) as CSV", result.orders_csv, "orders.csv", "text/csv",
+                       on_click="ignore", width="stretch")
+
+    with st.expander("Run details"):
         st.json({"settings": cfg, "strategy": r["strategy"], "timings": r["timings"]}, expanded=False)
         if result.log.strip():
             st.markdown("**What the strategy printed**")
@@ -331,7 +370,7 @@ def main() -> None:
     running, waiting = runner().queue_length()
     c1, c2 = st.columns([1, 4])
     clicked = c1.button("Run backtest", type="primary", disabled=job is not None or settings is None,
-                        use_container_width=True)
+                        width="stretch")
     c2.caption(f"Server: {running} running, {waiting} waiting. One run per visitor at a time, "
                f"{COOLDOWN_S} s apart; each run is limited to 120 s and 1.5 GB.")
 
