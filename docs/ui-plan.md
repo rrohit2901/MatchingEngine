@@ -1,5 +1,18 @@
 # Plan: a web UI for the backtester
 
+> **Status: built and live** at https://52-65-150-242.sslip.io (2026-10-03).
+> - **This file is the plan as it was written,** with the final decisions in the table
+>   below.
+> - **Where the build differs from the phase sections, the build wins:**
+>   - progress streams over stderr, not a polled file
+>   - there are no fills/orders tables
+>   - the deploy uses a forced-command key and `install-release.sh`, not `deploy.sh` over
+>     `scp`
+>   - hosting is AWS + sslip.io, not Oracle + Cloudflare
+> - **Every decision**, with who made it and what superseded what:
+>   [`decisions.md`](decisions.md).
+> - **How it runs:** [`deploy.md`](deploy.md).
+
 ## Context
 `me-backtest` runs a user's Python strategy against a replayed Nasdaq day. Phases 0–4 are
 in [`strategy-replay-plan.md`](strategy-replay-plan.md), and the user guide is
@@ -9,37 +22,41 @@ This plan puts a public web page in front of it:
 - The visitor picks every non-strategy setting, pastes a strategy, clicks **Run**, and sees
   the results on the page about 25–30 s later.
 - There is no email and no stored run history.
-- It is a personal project, so it runs on one free Oracle Cloud Always Free ARM VM.
+- It is a personal project, so it runs on one small VM. The plan was Oracle Cloud's free
+  tier; it ended up on AWS (see below).
 
-### Decided
-| decision | choice |
-|---|---|
-| UI framework | **Streamlit**, served from the VM |
-| result delivery | **on the page only**: the request waits for the run to finish |
-| hosting | **Oracle Cloud Always Free** ARM VM, with Cloudflare (free) in front |
-| sandbox | **isolate** (the IOI sandbox, also used by Judge0): one sandboxed process per run, inside a long-running app; no container per run |
-| how the app runs on the VM | **directly under systemd**, no Docker. isolate needs cgroup control, which inside Docker would mean a privileged container. The remaining risk is a kernel exploit escaping isolate onto a VM that holds no secrets; accepted for a personal project shared with a few users. |
-| concurrency | **2 runs at once**; further runs wait in a queue and see their place in it |
-| per-run limits | **120 s wall time, 90 s CPU, 1.5 GB memory** (after U0's memory fix), **20 MB of output, 100 KB of strategy code**, a **30 s cooldown** per session |
-| data exposure | **accepted.** User code can read the day's Parquet files inside its sandbox. That's acceptable for a personal project shown to a few users with one day of data; the output cap stays. |
-| data offered | **2026-09-29: AAPL, NVDA, TSLA** only; more days later |
-| repository | **this one** (public): `webapp/` and `deploy/` beside the engine, so engine and app changes ship together |
-| deployment | **GitHub Actions over SSH**: build the ARM wheel on GitHub's runner, install it on the VM as a new release, smoke test, switch, roll back on failure |
+### Decided (final)
+| decision | choice | the original plan said |
+|---|---|---|
+| UI framework | **Streamlit**, served from the VM | same |
+| result delivery | **on the page only**: the request waits for the run to finish | same |
+| hosting | **AWS EC2 t4g.small** (2 vCPU / 2 GB, ARM), Elastic IP, for about a month | Oracle Cloud Always Free; no capacity in the home region |
+| address and HTTPS | **`https://52-65-150-242.sslip.io`**, Caddy with a Let's Encrypt certificate; no domain bought | Cloudflare in front, which needs a domain |
+| sandbox | **isolate** (the IOI sandbox, also used by Judge0): one sandboxed process per run, inside a long-running app; no container per run | same |
+| how the app runs on the VM | **directly under systemd**, no Docker. isolate needs cgroup control, which inside Docker would mean a privileged container. The remaining risk is a kernel exploit escaping isolate onto a VM that holds no secrets; accepted for a personal project shared with a few users. | same |
+| concurrency | **1 run at a time**, up to **10 waiting**, each told its place in line | 2 at once and 20 waiting, for a larger VM |
+| per-run limits | **120 s wall time, 90 s CPU, 1 GB memory, 20 MB of output, 100 KB of strategy code**, 64 processes/threads, no network | 1.5 GB memory |
+| abuse protection | **per IP:** 1 run running or queued, 30 s apart, 20 an hour; connection limits in nftables | a per-session cooldown, plus Cloudflare rate limiting |
+| data exposure | **accepted.** User code can read the day's Parquet files inside its sandbox. That's acceptable for a personal project shown to a few users with one day of data; the output cap stays. | same |
+| data offered | **2026-09-29: AAPL, NVDA, TSLA** only; more days later | same |
+| repository | **this one** (public): `webapp/` and `deploy/` beside the engine, so engine and app changes ship together | same |
+| deployment | **GitHub Actions over SSH**, through a deploy-only key (forced command). The ARM wheel is built on GitHub's runner; the server checks the new release in the sandbox before switching, then health-checks it and rolls back on failure. | `scp` plus a sudo'd `deploy.sh` |
 
 ---
 
 ## Architecture
+As built. The plan had Cloudflare in front of an Oracle VM.
 ```
-browser ── Cloudflare (HTTPS, per-IP rate limit, DDoS) ── Oracle ARM VM
-                                                              ├─ Caddy  :443 → :8501
-                                                              └─ Streamlit app (one process, one thread per visitor)
-                                                                   └─ runner: waits for a free slot (at most N runs at once)
-                                                                        └─ isolate box per run
-                                                                             python -m matching_engine.cli run
-                                                                               --config run.toml --out result/
-                                                                             · reads  /data (read-only, Databento Parquet)
-                                                                             · writes /box  (run.toml, strategy.py, result/)
-                                                                             · no network, empty environment, cgroup limits
+browser ──https──> Caddy (:443, Let's Encrypt cert for 52-65-150-242.sslip.io)      AWS t4g.small
+                     │  per-IP connection limits (nftables)
+                     └─> Streamlit app (127.0.0.1:8501; one process, one thread per visitor)
+                           │  per-IP run limits; queue: 1 running, 10 waiting
+                           └─> isolate box per run
+                                 python -m matching_engine.cli run --config run.toml --out result --progress -
+                                 · reads  /data (read-only, Databento Parquet) and the virtualenv (read-only)
+                                 · writes /box  (strategy.py, run.toml, result/, log.txt)
+                                 · no network, its own UID, empty environment, cgroup limits
+                                 · progress streams back on stderr
 ```
 
 Why no separate job queue or worker service:
@@ -350,5 +367,6 @@ https://52-65-150-242.sslip.io (Caddy + Let's Encrypt; no domain).
 How to run, rebuild and take it down: [`deploy.md`](deploy.md).
 
 ## Decisions log
-All five open questions were answered on 2026-10-03 and are recorded in the table under
-*Decided* at the top.
+The open questions this plan raised were answered on 2026-10-03 and are in *Decided
+(final)* at the top. The full list, including later changes, is in
+[`decisions.md`](decisions.md).

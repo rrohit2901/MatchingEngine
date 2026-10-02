@@ -71,7 +71,7 @@ find /srv/me/data -type d -exec chmod 755 {} + -o -type f -exec chmod 644 {} +
 if [ -f "$(dirname "$0")/systemd/me-web.service" ]; then
     install -m 644 "$(dirname "$0")/systemd/me-web.service" /etc/systemd/system/me-web.service
     systemctl daemon-reload
-    systemctl enable me-web.service   # started once a release is installed (install-from-source.sh)
+    systemctl enable me-web.service   # started once a release is installed (install-release.sh)
 fi
 
 log "Release installer and the CI deploy user"

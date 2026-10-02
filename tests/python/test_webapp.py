@@ -62,3 +62,28 @@ def test_bad_parameters_are_reported(app):
     app.text_area[1].set_value("this is = = not toml")
     app.button[0].click().run()
     assert app.error and "not valid TOML" in app.error[0].value
+
+
+def test_run_label_heads_the_results(app):
+    app.text_area[0].set_value(
+        "from matching_engine.backtest import Strategy\n"
+        "class Lift(Strategy):\n"
+        "    def on_timer(self, ctx):\n"
+        "        if not getattr(self, 'sent', False):\n"
+        "            self.sent = True\n"
+        "            ctx.buy(ctx.best_ask.price, 5)\n")
+    app.text_area[1].set_value("")
+    app.text_input(key="label").set_value("Lift test **#1**")
+    app.sidebar.time_input[0].set_value(dt_time(9, 31))
+    app.sidebar.time_input[1].set_value(dt_time(9, 32))
+    app.sidebar.number_input[0].set_value(100.0)
+    app.button[0].click().run()
+
+    deadline = time.monotonic() + 60
+    while not app.metric and time.monotonic() < deadline:
+        time.sleep(0.5)
+        app.run()
+        assert not app.exception, app.exception
+    # The label is the heading, shown literally (no Markdown from it); the class name follows.
+    assert app.subheader[0].value == r"Lift test \*\*\#1\*\*"
+    assert any("Lift on TEST" in m.value for m in app.markdown)

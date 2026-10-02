@@ -267,7 +267,8 @@ Honest list, since some of these look like features from the outside:
 - **Single symbol.** No multi-instrument support.
 - **Market orders are not fully implemented** — a `MARKET` order is booked at the price passed
   in and only changes which event is emitted. It does not sweep the book at any price.
-- **No IOC, FOK, stop, or iceberg orders**, and no self-trade prevention.
+- **No IOC, FOK, stop, or iceberg orders**, and no self-trade prevention in the engine
+  itself. The backtest simulator has opt-in self-trade prevention.
 - **The event queue is SPSC only.** `RingBuffer` assumes exactly one producer thread and
   one consumer thread; two producers will both observe free space and write the same slot.
   It is not a general-purpose queue.
@@ -302,7 +303,7 @@ deploy/                  VM provisioning, release installer, CI deploy entry poi
 webapp/                  Streamlit UI and the sandboxed backtest runner
 docs/                    backtesting and deployment guides, replay and UI plans, optimization notes
 tests/                   10 GoogleTest suites
-tests/python/            pytest suite for the bindings
+tests/python/            pytest suites: bindings, replay, backtest/CLI, web runner, web UI
 bench/                   Google Benchmark suites + latency harness
 scripts/                 Databento market data download, conversion, inspection, validation
 ```
@@ -370,6 +371,8 @@ There is also a web UI, live at https://52-65-150-242.sslip.io; to run it yourse
 setting in a sidebar, a strategy editor, and charts of the result. The guide (strategy API,
 config, the fill model and its limits) is [`docs/backtesting.md`](docs/backtesting.md);
 how it was built and validated is in [`docs/strategy-replay-plan.md`](docs/strategy-replay-plan.md).
+How the site is deployed, operated and taken down: [`docs/deploy.md`](docs/deploy.md).
+Every design decision, with who made it: [`docs/decisions.md`](docs/decisions.md).
 
 ## Next
 
