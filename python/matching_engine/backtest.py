@@ -168,6 +168,11 @@ class Context:
         """Cash plus position at the last mid, minus fees, in dollars."""
         return self._sim.mark_to_market()
 
+    def capital_deployed(self, side: str) -> float:
+        """Dollars deployed on "BUY" or "SELL" as [risk] max_capital measures it: the
+        position at the current mid plus that side's open orders at their prices."""
+        return self._sim.capital_deployed(OrderSide.BUY if side.upper() == "BUY" else OrderSide.SELL)
+
     @property
     def fills(self) -> list[Fill]:
         """Fills since the previous callback."""
@@ -228,6 +233,7 @@ class BacktestConfig:
     order_latency_us: float = 0.0
     md_latency_us: float = 0.0
     max_position: int = 0            # shares; 0 = no limit
+    max_capital: float = 0.0         # dollars per side (position at mid + open orders); 0 = no limit
     max_order_qty: int = 100_000
     min_order_qty: int = 1
     max_price_deviation: float = 1.00   # dollars from the same-side best price
@@ -256,6 +262,7 @@ class BacktestConfig:
         c.order_latency_ns = int(self.order_latency_us * 1e3)
         c.md_latency_ns = int(self.md_latency_us * 1e3)
         c.max_position = int(self.max_position)
+        c.max_capital = float(self.max_capital)
         c.risk = RiskParams(int(self.max_order_qty), int(self.min_order_qty), to_ticks(self.max_price_deviation))
         c.maker_fee = float(self.maker_fee)
         c.taker_fee = float(self.taker_fee)

@@ -20,6 +20,7 @@ market_data_us = 20              # exchange -> strategy; adds to the order delay
 
 [risk]
 max_position = 2_000             # shares, long or short, counting open orders; 0 = no limit
+max_capital = 0                  # dollars per side: position at mid + open orders at their prices; 0 = no limit
 max_order_qty = 10_000
 min_order_qty = 1
 max_price_deviation = 1.00       # dollars from the same-side best price

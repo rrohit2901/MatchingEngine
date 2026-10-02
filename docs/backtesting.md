@@ -64,6 +64,7 @@ class JoinTheBid(Strategy):
 | `ctx.book(levels=5)` | `Book(bids, asks)`, each a list of `Level(price, quantity)`, best first |
 | `ctx.best_bid`, `ctx.best_ask`, `ctx.mid` | `Level` or `None`; mid as a float or `None` |
 | `ctx.position` | shares, + long / − short |
+| `ctx.capital_deployed("BUY")` | dollars deployed on a side, as `max_capital` measures it |
 | `ctx.cash`, `ctx.pnl` | dollars; `pnl` = cash + position × mid − fees |
 | `ctx.fills` | `Fill`s since the previous callback |
 | `ctx.open_orders` | `Order`s that are `PENDING` (in flight) or `OPEN`, oldest first |
@@ -87,6 +88,7 @@ class JoinTheBid(Strategy):
 |---|---|---|
 | `PRICE_INCREMENT` | gateway, immediately | price not a whole cent |
 | `POSITION_LIMIT` | gateway, immediately | `[risk] max_position` exceeded, counting every open order on that side as if filled |
+| `CAPITAL_LIMIT` | gateway, immediately | `[risk] max_capital` exceeded: dollars deployed on that side, which is the position at the current mid plus every open order on the side at its limit price, plus this order. Orders that reduce the position are never blocked. |
 | `OUTSIDE_TRADING_WINDOW` | gateway, immediately | sent outside `[session]` start–end |
 | `QUANTITY_ABOVE_MAX` / `QUANTITY_BELOW_MIN` | exchange, on arrival | `[risk] max_order_qty` / `min_order_qty` |
 | `PRICE_TOO_FAR_FROM_TOP` | exchange, on arrival | more than `[risk] max_price_deviation` dollars from the same-side best price |
@@ -101,7 +103,7 @@ class JoinTheBid(Strategy):
 | `[data]` | `date`, `symbol` (one per run), `dir` |
 | `[session]` | `start`, `end` (New York time; defaults 09:31–15:59, clear of the auctions), `timer_ms` |
 | `[latency]` | `order_us` (strategy → exchange), `market_data_us` (exchange → strategy) |
-| `[risk]` | `max_position`, `max_order_qty`, `min_order_qty`, `max_price_deviation` |
+| `[risk]` | `max_position` (shares), `max_capital` (dollars), `max_order_qty`, `min_order_qty`, `max_price_deviation` |
 | `[fees]` | `maker`, `taker`: dollars per share, negative = rebate |
 | `[model]` | `passive_impact`, `self_trade_prevention` (see below) |
 | `[strategy]` | `path`, optional `class`, and `[strategy.params]` passed to the constructor |

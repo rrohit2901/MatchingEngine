@@ -44,6 +44,7 @@ CONFIG_KEYS = {
     ("latency", "order_us"): "order_latency_us",
     ("latency", "market_data_us"): "md_latency_us",
     ("risk", "max_position"): "max_position",
+    ("risk", "max_capital"): "max_capital",
     ("risk", "max_order_qty"): "max_order_qty",
     ("risk", "min_order_qty"): "min_order_qty",
     ("risk", "max_price_deviation"): "max_price_deviation",
@@ -110,7 +111,7 @@ def build_run(args: argparse.Namespace) -> tuple[BacktestConfig, type[Strategy],
     overrides = {
         "date": args.date, "symbol": args.symbol, "data_dir": args.data, "start": args.start, "end": args.end,
         "timer_ms": args.timer_ms, "order_latency_us": args.order_latency_us, "md_latency_us": args.md_latency_us,
-        "max_position": args.max_position, "passive_impact": args.passive_impact,
+        "max_position": args.max_position, "max_capital": args.max_capital, "passive_impact": args.passive_impact,
         "self_trade_prevention": args.self_trade_prevention,
     }
     settings.update({k: v for k, v in overrides.items() if v is not None})
@@ -265,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--order-latency-us", type=float)
     run.add_argument("--md-latency-us", type=float)
     run.add_argument("--max-position", type=int)
+    run.add_argument("--max-capital", type=float, help="dollars deployed per side; 0 = no limit")
     run.add_argument("--passive-impact", action=argparse.BooleanOptionalAction, default=None,
                      help="take passive strategy fills out of the venue order behind (default on)")
     run.add_argument("--self-trade-prevention", action=argparse.BooleanOptionalAction, default=None,

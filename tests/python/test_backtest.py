@@ -144,3 +144,21 @@ def test_off_grid_price_is_rejected_not_rounded():
     strategy = OffGrid()
     run_backtest(strategy, CONFIG, mbo=tape(BOOK + [(59_000, "N", "N", 0, 0, 0, True)]))
     assert (strategy.status.status, strategy.status.reject_reason) == ("REJECTED", "PRICE_INCREMENT")
+
+
+def test_capital_limit_rejects_in_dollars():
+    class Spend(Strategy):
+        def on_timer(self, ctx):
+            if not getattr(self, "ids", None):
+                bid = ctx.best_bid.price
+                self.ids = [ctx.buy(bid, 9), ctx.buy(bid, 2)]   # $899.91, then $199.98 more
+                self.deployed = ctx.capital_deployed("BUY")
+                self.orders = [ctx.order(i) for i in self.ids]
+
+    config = BacktestConfig(date=DATE, symbol="TEST", start="09:31:00", end="09:32:00", timer_ms=100,
+                            max_capital=1_000.0)
+    strategy = Spend()
+    run_backtest(strategy, config, mbo=tape(BOOK + [(59_000, "N", "N", 0, 0, 0, True)]))
+    assert strategy.orders[0].status == "PENDING"
+    assert (strategy.orders[1].status, strategy.orders[1].reject_reason) == ("REJECTED", "CAPITAL_LIMIT")
+    assert strategy.deployed == pytest.approx(899.91)

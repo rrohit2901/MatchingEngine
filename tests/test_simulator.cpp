@@ -371,3 +371,51 @@ TEST(Simulator, ValidatorRunsOnTheSimulator) {
     EXPECT_EQ(report.compared, 3u);
     EXPECT_EQ(report.mismatched, 0u);
 }
+
+TEST(Simulator, CapitalLimitCountsOpenOrdersAtTheirPrice) {
+    Tape tape;
+    tape.rec(10, 'A', 'B', P - CENT, 10, 1).rec(10, 'A', 'A', P + CENT, 10, 2).rec(1'000, 'N', 'N', 0, 0, 0);
+    SimConfig c = config();
+    c.max_capital = 1'000.0;   // dollars
+    std::vector<uint64_t> ids;
+    const Simulator sim = runWith(tape, c, 100, [&](Simulator& s) {
+        ids.push_back(s.submit(OrderSide::BUY, P, 9));          // $900 resting: fine
+        ids.push_back(s.submit(OrderSide::BUY, P, 2));          // +$200 = $1,100: over
+        ids.push_back(s.submit(OrderSide::SELL, P + CENT, 5));  // the sell side has its own $1,000
+    });
+    EXPECT_NE(order(sim, ids[0]).status, StrategyOrderStatus::REJECTED);
+    EXPECT_STREQ(order(sim, ids[1]).reject_reason, "CAPITAL_LIMIT");
+    EXPECT_NE(order(sim, ids[2]).status, StrategyOrderStatus::REJECTED);
+}
+
+TEST(Simulator, CapitalLimitValuesThePositionAtTheCurrentMid) {
+    Tape tape;
+    tape.rec(10, 'A', 'B', P - CENT, 10, 1).rec(10, 'A', 'A', P + CENT, 10, 2)
+        // The market moves up $2: both sides requote.
+        .rec(150, 'C', 'B', P - CENT, 10, 1, false).rec(150, 'C', 'A', P + CENT, 10, 2, false)
+        .rec(150, 'A', 'B', P + 199 * CENT, 10, 3, false).rec(150, 'A', 'A', P + 201 * CENT, 10, 4, true)
+        .rec(1'000, 'N', 'N', 0, 0, 0);
+    SimConfig c = config();
+    c.max_capital = 1'010.0;
+    int calls = 0;
+    uint64_t buy = 0, more = 0, sell = 0;
+    double deployed_before = 0, deployed_after = 0;
+    Simulator sim(c);
+    sim.run(tape.events(), [&](Simulator& s) {
+        ++calls;
+        if (calls == 2) buy = s.submit(OrderSide::BUY, P + CENT, 8);   // t=100: lifts 8 at 100.01
+        if (calls == 2) deployed_before = s.capitalDeployed(OrderSide::BUY);
+        if (calls == 3) {                                              // t=200: mid is now 102.00
+            deployed_after = s.capitalDeployed(OrderSide::BUY);
+            // At the old 100.00 mid this would be 800 + 202 = $1,002, inside the limit;
+            // at the current mid it is 816 + 202 = $1,018.
+            more = s.submit(OrderSide::BUY, P + 101 * CENT, 2);
+            sell = s.submit(OrderSide::SELL, P + 201 * CENT, 8);       // reduces the long: never blocked
+        }
+    });
+    EXPECT_EQ(order(sim, buy).filled, 8);
+    EXPECT_NEAR(deployed_before, 800.08, 1e-9);  // in flight: counted at its limit price, 8 x 100.01...
+    EXPECT_NEAR(deployed_after, 816.0, 1e-9);    // ...and once filled, 8 shares at the 102.00 mid
+    EXPECT_STREQ(order(sim, more).reject_reason, "CAPITAL_LIMIT");
+    EXPECT_NE(order(sim, sell).status, StrategyOrderStatus::REJECTED);
+}

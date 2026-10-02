@@ -268,7 +268,8 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
   - One clock merges strategy actions arriving at the exchange, venue records and the
     strategy timer. At equal times the order is action, then venue, then timer.
   - Market-data latency is folded into the action delay.
-  - Gateway checks: price grid, position limit, trading window.
+  - Gateway checks: price grid, position limit, capital limit (USD per side; position at
+    the current mid plus open orders at their prices), trading window.
   - Exchange checks on arrival: `RiskManager`, plus self-trade prevention if opted in.
   - Limit orders only.
   - Fees, an equity curve, and reconciliation counters.
@@ -278,7 +279,7 @@ How to use it: [`backtesting.md`](backtesting.md). The rules: `include/replay/Si
   - `run`: TOML config plus flag overrides, `--param`, and CSV outputs.
   - `validate` (`--through-simulator`).
 - **Example:** `strategies/ob_alpha.py` and `.toml`.
-- **Tests:** 17 gtest cases (`tests/test_simulator.cpp`) and 5 pytest cases
+- **Tests:** 19 gtest cases (`tests/test_simulator.cpp`) and 6 pytest cases
   (`tests/python/test_backtest.py`).
 
 **Departures from the plan above, and why**

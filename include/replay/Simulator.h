@@ -67,6 +67,13 @@ struct SimConfig {
     // 0 = no limit. Otherwise an order is rejected if, filled in full together
     // with every open order on the same side, it would take |position| past this.
     int64_t max_position = 0;
+    // Dollars; 0 = no limit. The capital the strategy has deployed on one side:
+    // the shares it holds, valued at the current mid, plus every open order
+    // that adds to that side, valued at its limit price. An order is rejected
+    // (CAPITAL_LIMIT) if, together with all of that, it would take the side past
+    // this. Orders that reduce the position (selling a long, buying back a
+    // short) lower the figure, so they are never blocked by it.
+    double max_capital = 0.0;
     RiskParams risk{};
     // Per share, in dollars; negative is a rebate.
     double maker_fee = 0.0;
@@ -197,6 +204,9 @@ class Simulator {
         const std::vector<EquitySample>& equityCurve() const { return equity; }
         const SimStats& getStats() const;
         const SimConfig& getConfig() const { return config; }
+        // Capital deployed on one side, in dollars, as max_capital measures it
+        // (position at the current mid, plus that side's open orders).
+        double capitalDeployed(OrderSide side) const;
 
     private:
         struct VenueOrder {
@@ -231,6 +241,8 @@ class Simulator {
         double fee_total = 0.0;
         int64_t open_buy_qty = 0;         // resting + in flight, for the position limit
         int64_t open_sell_qty = 0;
+        int64_t open_buy_value = 0;       // the same orders at their limit prices, 1e-4 $ x shares,
+        int64_t open_sell_value = 0;      // for the capital limit
 
         std::vector<StrategyFill> fill_log;
         std::vector<EquitySample> equity;
@@ -273,6 +285,10 @@ class Simulator {
         // for a venue add (then any strategy order it hits is the maker).
         int cross(OrderSide incoming, int price, int qty, StrategyOrder* aggressor);
         void recordEquity();
+        // Twice the current mid in ticks; the last known one if a side is empty, 0 if never known.
+        int currentMidX2() const;
+        // capitalDeployed in 1e-4 $, with the position valued at `fallback_price` when no mid is known.
+        double capitalTicks(OrderSide side, int fallback_price) const;
 };
 
 // Replays MBO through Simulator with no strategy and validates the book against

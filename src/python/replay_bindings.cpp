@@ -178,6 +178,7 @@ void bindReplay(py::module_& m) {
         .def_readwrite("trade_end_ns", &SimConfig::trade_end_ns)
         .def_readwrite("price_increment", &SimConfig::price_increment)
         .def_readwrite("max_position", &SimConfig::max_position)
+        .def_readwrite("max_capital", &SimConfig::max_capital)
         .def_readwrite("risk", &SimConfig::risk)
         .def_readwrite("maker_fee", &SimConfig::maker_fee)
         .def_readwrite("taker_fee", &SimConfig::taker_fee)
@@ -203,6 +204,8 @@ class. Prices here are int ticks of 1e-4 $, times are UTC nanoseconds.
         .def_property_readonly("cash_ticks", &Simulator::cashTicks)
         .def_property_readonly("fees", &Simulator::fees)
         .def("mark_to_market", &Simulator::markToMarket)
+        .def("capital_deployed", &Simulator::capitalDeployed, py::arg("side"),
+             "Dollars deployed on one side, as max_capital measures it.")
         .def("book", [](const Simulator& s, unsigned n) {
                  return py::make_tuple(levels(s.getBook().getBuySideView(static_cast<int>(n))),
                                        levels(s.getBook().getSellSideView(static_cast<int>(n))));

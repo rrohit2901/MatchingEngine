@@ -88,14 +88,18 @@ void Simulator::recordFill(StrategyOrder& order, int qty, int price, bool maker,
     if (qty <= 0) return;
     const int64_t q = qty;
     const int64_t value = static_cast<int64_t>(price) * q;
+    // Open-order value is kept at the limit price, whatever price the fill got.
+    const int64_t open_value = static_cast<int64_t>(order.price) * q;
     if (order.side == OrderSide::BUY) {
         pos += q;
         cash -= value;
         open_buy_qty -= q;
+        open_buy_value -= open_value;
     } else {
         pos -= q;
         cash += value;
         open_sell_qty -= q;
+        open_sell_value -= open_value;
     }
     fee_total += static_cast<double>(q) * (maker ? config.maker_fee : config.taker_fee);
     order.filled += qty;
@@ -109,6 +113,7 @@ void Simulator::finish(StrategyOrder& order, StrategyOrderStatus status) {
     const int64_t unfilled = order.quantity - order.filled;
     if (status != StrategyOrderStatus::FILLED && unfilled > 0) {
         (order.side == OrderSide::BUY ? open_buy_qty : open_sell_qty) -= unfilled;
+        (order.side == OrderSide::BUY ? open_buy_value : open_sell_value) -= static_cast<int64_t>(order.price) * unfilled;
     }
     if (order.engine_id != 0) {
         strategy_by_engine.erase(order.engine_id);
@@ -366,6 +371,10 @@ uint64_t Simulator::submit(OrderSide side, int price, int quantity) {
                                                       : -(pos - open_sell_qty - quantity);
         if (worst > config.max_position) reason = "POSITION_LIMIT";
     }
+    if (!reason && config.max_capital > 0.0) {
+        const double after = capitalTicks(side, price) + static_cast<double>(price) * quantity;
+        if (after > config.max_capital * 10'000.0) reason = "CAPITAL_LIMIT";
+    }
 
     auto [it, inserted] = strategy_orders.emplace(order.client_id, order);
     StrategyOrder& stored = it->second;
@@ -376,6 +385,7 @@ uint64_t Simulator::submit(OrderSide side, int price, int quantity) {
         return stored.client_id;
     }
     (side == OrderSide::BUY ? open_buy_qty : open_sell_qty) += quantity;
+    (side == OrderSide::BUY ? open_buy_value : open_sell_value) += static_cast<int64_t>(price) * quantity;
     live_ids.insert(stored.client_id);
     in_flight.push_back({clock + config.md_latency_ns + config.order_latency_ns, ActionKind::SUBMIT, stored.client_id});
     return stored.client_id;
@@ -467,6 +477,26 @@ void Simulator::recordEquity() {
     const auto ask = book.getBestPrice(OrderSide::SELL);
     if (bid && ask) last_mid_x2 = *bid + *ask;
     equity.push_back({clock, pos, cash, last_mid_x2, fee_total});
+}
+
+int Simulator::currentMidX2() const {
+    const auto bid = book.getBestPrice(OrderSide::BUY);
+    const auto ask = book.getBestPrice(OrderSide::SELL);
+    return bid && ask ? *bid + *ask : last_mid_x2;
+}
+
+double Simulator::capitalTicks(OrderSide side, int fallback_price) const {
+    const int mid_x2 = currentMidX2();
+    const double mark = mid_x2 ? mid_x2 / 2.0 : static_cast<double>(fallback_price);
+    // A long counts toward the buy side and a short toward the sell side; the
+    // opposite sign nets against that side's open orders.
+    const double held = static_cast<double>(side == OrderSide::BUY ? pos : -pos) * mark;
+    const int64_t open = side == OrderSide::BUY ? open_buy_value : open_sell_value;
+    return held + static_cast<double>(open);
+}
+
+double Simulator::capitalDeployed(OrderSide side) const {
+    return capitalTicks(side, 0) / 10'000.0;
 }
 
 double Simulator::markToMarket() const {
