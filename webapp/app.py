@@ -20,6 +20,7 @@ from datetime import datetime, time as Time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -318,7 +319,13 @@ def show_result(result: RunResult) -> None:
             st.markdown("**Position (shares)**")
             st.line_chart(equity, x="time", y="position", height=260)
         st.markdown("**Mid price ($)**")
-        st.line_chart(equity.dropna(subset=["mid"]), x="time", y="mid", height=200)
+        # The axis must fit the data: from $0 a day's move (~2% of the price) is a flat line.
+        mid = (alt.Chart(equity.dropna(subset=["mid"])).mark_line()
+               .encode(x=alt.X("time:T", title=None),
+                       y=alt.Y("mid:Q", title=None, scale=alt.Scale(zero=False)),
+                       tooltip=[alt.Tooltip("time:T", format="%H:%M:%S"), alt.Tooltip("mid:Q", format="$.3f")])
+               .properties(height=220))
+        st.altair_chart(mid, width="stretch")
 
     c1, c2 = st.columns(2)
     with c1:
