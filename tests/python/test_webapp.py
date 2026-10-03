@@ -1,5 +1,6 @@
 """Smoke test of the Streamlit page: render, run a backtest on a tiny day, see results."""
 
+import re
 import time
 from datetime import time as dt_time
 from pathlib import Path
@@ -87,3 +88,6 @@ def test_run_label_heads_the_results(app):
     # The label is the heading, shown literally (no Markdown from it); the class name follows.
     assert app.subheader[0].value == r"Lift test \*\*\#1\*\*"
     assert any("Lift on TEST" in m.value for m in app.markdown)
+    # Every $ in Markdown is escaped: two bare ones would turn the text between them into LaTeX.
+    for caption in app.caption:
+        assert not re.search(r"(?<!\\)\$", caption.value), caption.value

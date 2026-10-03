@@ -249,13 +249,20 @@ ERROR_TITLES = {
 }
 
 
+def dollars(text: str) -> str:
+    """Text for Markdown with its dollar signs shown as typed. Streamlit draws whatever
+    sits between two $ as a LaTeX formula: "notional $502.1M · exact PnL $-24,318.47"
+    lost both signs and set the words between them as math."""
+    return text.replace("$", "\\$")
+
+
 def ny(ts_ns: pd.Series) -> pd.Series:
     return pd.to_datetime(ts_ns, unit="ns", utc=True).dt.tz_convert(NEW_YORK).dt.tz_localize(None)
 
 
 def show_error(result: RunResult) -> None:
     err = result.error or {}
-    st.error(f"**{ERROR_TITLES.get(err.get('kind'), 'The run failed')}**\n\n{err.get('message', '')}")
+    st.error(f"**{ERROR_TITLES.get(err.get('kind'), 'The run failed')}**\n\n{dollars(err.get('message', ''))}")
     if err.get("location"):
         st.markdown(f"At line **{err['location']['line']}**:")
         st.code(err["location"].get("text") or "", language="python")
@@ -356,8 +363,8 @@ def show_result(result: RunResult, label: str = "") -> None:
     cols[1].metric("Maker share", f"{s['maker_share']:.1%}")
     cols[2].metric("Fees", money(s["fees"]))
     cols[3].metric("Orders (rejected)", f"{count(s['orders'])} ({count(s['rejected'])})")
-    st.caption(f"Bought {s['bought']:,} and sold {s['sold']:,} shares · notional {money(s['notional'])} · "
-               f"max long {s['max_long']:,} / short {s['max_short']:,} shares · exact PnL ${s['pnl']:,.2f}")
+    st.caption(dollars(f"Bought {s['bought']:,} and sold {s['sold']:,} shares · notional {money(s['notional'])} · "
+                       f"max long {s['max_long']:,} / short {s['max_short']:,} shares · exact PnL ${s['pnl']:,.2f}"))
 
     equity = data["equity"]
     if not equity.empty:
@@ -449,7 +456,7 @@ def main() -> None:
             st.rerun()
 
     if "notice" in st.session_state:
-        st.warning(st.session_state.notice)
+        st.warning(dollars(st.session_state.notice))
     progress_panel()
     if "result" in st.session_state:
         show_result(st.session_state.result, st.session_state.get("result_label", ""))
