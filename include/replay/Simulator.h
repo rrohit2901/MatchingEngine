@@ -84,8 +84,8 @@ struct SimConfig {
     //    received is taken out of the venue's fill, so the venue order behind it
     //    keeps that size, as it would have in reality. Once the venue retires
     //    that order, the size stays in the book as an orphan that no later record
-    //    removes (counted in SimStats; ~570k shares by the close on AAPL with the
-    //    example strategy).
+    //    removes (counted in SimStats; ~40k shares by the close on AAPL with the
+    //    ob_alpha example at its default parameters).
     //  false: no impact. The execution fills the strategy order AND still
     //    happens to the venue orders exactly as recorded, so the venue's side of
     //    the book stays identical to Nasdaq's, at the cost of counting the

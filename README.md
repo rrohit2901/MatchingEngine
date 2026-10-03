@@ -119,8 +119,10 @@ Your orders live in the same book as the real ones. How they fill:
 - **CLI:** `me-backtest run` takes a TOML config, with any setting overridable by a flag.
   It prints a report and can write fills, orders and the equity curve as CSV, or JSON for
   programs.
-- **Speed:** a full session (6.5 h at 10 ms, about 2.3 M strategy calls) runs in roughly
-  15–20 s.
+- **Speed:** a full session (6.5 h at 10 ms, about 2.3 M strategy calls) replays in
+  about 11 s for the order-book alpha example and about 30 s for the simple quoter, on
+  AAPL. The time is mostly the Python strategy: the quoter reads its open orders on every
+  call.
 - The API reference, every config key and every reject reason:
   [`docs/backtesting.md`](docs/backtesting.md).
 
@@ -187,7 +189,7 @@ benchmark it: **[`docs/engine.md`](docs/engine.md)**.
 | what | result |
 |---|---|
 | replay vs Nasdaq's own top of book | 2,846,628 comparisons, 0 mismatches |
-| full-session backtest | ~2.3 M strategy calls in ~15–20 s; deterministic |
+| full-session backtest | ~2.3 M strategy calls in ~11–35 s, depending on the strategy; deterministic |
 | PnL vs the fill log | identical (to the cent) |
 | sandbox, checked on every release | 9 of 9 hostile strategies stopped |
 | order book add | 58 ns P50, 95 ns P99 |
