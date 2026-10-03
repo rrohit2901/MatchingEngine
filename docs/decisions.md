@@ -105,6 +105,7 @@ replay, simulator, CLI) and [`ui-plan.md`](ui-plan.md) (UI, sandbox, hosting). H
 | 56 | Code editor: `streamlit-code-editor` (Ace), live autocompletion off | auto-indent; live completion took the Enter key while typing | user (editor); Claude (autocompletion, found in a browser test) | current |
 | 57 | Syntax errors are caught by compiling (never running) the code, before the rate limits and the queue | a typo shouldn't cost a slot or the cooldown | user | current |
 | 58 | Code and parameters kept in the visitor's browser (localStorage, via an inline `st.components.v2` script); nothing on the server | a reload lost the code | user | current |
+| 59 | Example defaults: `quote_touch` 10 shares, ±100; `ob_alpha` 6 levels, $1,000 at equal weights, requote every 100 calls (1 s), ±1,500 | the earlier defaults lost far more (AAPL: −$18.8k and −$24.3k, now −$1.9k and +$1.6k). These are in-sample, chosen on the one day they are scored on | user | current |
 
 ## Open
 

@@ -14,10 +14,11 @@ with configurable latency, and reports what happened.
 
 ```bash
 pip install '.[backtest]'          # builds the extension; adds pyarrow and a TOML reader
-me-backtest run --config strategies/ob_alpha.toml
+me-backtest run --config strategies/quote_touch.toml   # the simple example
+me-backtest run --config strategies/ob_alpha.toml      # the order-book alpha example
 ```
 
-That runs the example strategy on AAPL for 2026-09-29. It needs the converted
+Each runs its example strategy on AAPL for 2026-09-29. It needs the converted
 data in `data/databento/2026-09-29/`; [Getting data](#getting-data) explains how
 to get it.
 
@@ -30,8 +31,10 @@ me-backtest run --strategy my_strategy.py --date 2026-09-29 --symbol TSLA
 me-backtest run --help
 ```
 
-A full regular session (6.5 h, a 10 ms timer, about 2.3 M strategy calls)
-takes about 15 s.
+A full regular session (6.5 h, a 10 ms timer, about 2.3 M strategy calls) on AAPL
+replays in about 11 s with `ob_alpha` and about 30 s with `quote_touch`, plus about
+1 s to load the data. Most of the time is the strategy's own Python. `quote_touch`
+reads `ctx.open_orders` on every call, and `ob_alpha` requotes once a second.
 
 ## Writing a strategy
 
@@ -158,8 +161,9 @@ that saw T's data `market_data_us` late would have sent them.
   size the strategy took, as it would have in reality.
   - The catch: once Nasdaq retires that order, nothing in the data removes the
     size it kept. It stays in the book as an orphan.
-  - On the example strategy that came to about 24,600 orphaned orders (568k shares)
-    on AAPL by the close. The report counts them.
+  - On AAPL by the close, that comes to about 14,800 orphaned orders (40k shares)
+    with `ob_alpha` and 7,500 (62k shares) with `quote_touch`, at their default
+    parameters. The report counts them.
 - **`passive_impact = false`:** leaves the real orders exactly as recorded, so the
   replayed market stays identical to Nasdaq's. The strategy is filled in addition,
   so the execution is counted twice.
@@ -232,17 +236,25 @@ Live at **https://52-65-150-242.sslip.io**.
 
 - **Sidebar:** every setting above.
 - **Main area:**
-  - the strategy's code (or upload a `.py` file)
-  - its parameters, as TOML
+  - the strategy's code, in a code editor with auto-indent and Python highlighting
+    (or upload a `.py` file)
+  - an **example picker**: the page starts with `quote_touch`, and *Load example*
+    replaces the code and parameters with it or with `ob_alpha`
+  - the strategy's parameters, as TOML
   - an optional **run label**, which heads the results and names the downloads.
     Without one, the heading is your Strategy class's name.
+  - the code and parameters are kept in your browser (localStorage), so a reload
+    doesn't lose them; nothing is stored on the server
+- **Syntax errors** are reported immediately, by compiling (never running) the code,
+  before the run is queued and before it counts against your limits.
 - **Run:** executes in a separate process with limits:
   - 120 s wall time, 90 s CPU, 20 MB of output, 100 KB of code
   - memory: 1.5 GB locally, 1 GB on the server
   - runs at once: 2 locally, 1 on the server; the rest queue
   - per visitor IP: one run at a time, 30 s apart, 20 an hour
 - **Results** appear on the page:
-  - metrics
+  - metrics: PnL with its realized and unrealized parts, PnL per share, Sharpe,
+    drawdown, position, fills, fill ratio, maker share, fees, orders
   - equity, position and mid charts
   - fills by source and rejects
   - reconciliation counters
