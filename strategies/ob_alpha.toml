@@ -38,11 +38,11 @@ path = "strategies/ob_alpha.py"
 
 [strategy.params]
 side = "both"                    # buy, sell or both
-levels = 5
-order_value = 5_000.0            # dollars per order before weighting
-weights = [5, 4, 3, 2, 1]        # level 1 (the touch) first
+levels = 6
+order_value = 1_000.0            # dollars per order before weighting
+weights = [1, 1, 1, 1, 1, 1]     # level 1 (the touch) first
 max_position = 1_500
-requote_every = 10               # timer calls between requotes: 100 ms at timer_ms = 10
+requote_every = 100              # timer calls between requotes: 1 s at timer_ms = 10
 
 [output]
 pnl_sample_ms = 1_000

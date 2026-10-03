@@ -11,7 +11,7 @@ from matching_engine.backtest import Strategy
 
 
 class QuoteTheTouch(Strategy):
-    def __init__(self, size=100, max_position=500):
+    def __init__(self, size=10, max_position=100):
         super().__init__(size=size, max_position=max_position)
         self.size, self.max_position = size, max_position
 
