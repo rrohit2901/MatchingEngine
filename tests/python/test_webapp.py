@@ -46,7 +46,7 @@ def test_page_renders_with_defaults(app):
     assert app.sidebar.selectbox[0].value == DATE
     assert app.sidebar.selectbox[1].value == "TEST"
     assert "class QuoteTheTouch" in app.session_state["code"]       # the simple example
-    assert "max_position = 500" in app.text_area(key="params").value
+    assert "max_position = 100" in app.text_area(key="params").value
 
 
 def test_load_example_replaces_code_and_parameters(app):

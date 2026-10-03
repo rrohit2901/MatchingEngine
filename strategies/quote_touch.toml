@@ -37,8 +37,8 @@ self_trade_prevention = false    # Nasdaq's default: the strategy's own orders c
 path = "strategies/quote_touch.py"
 
 [strategy.params]
-size = 100                       # shares per quote
-max_position = 500               # stop adding to a side at this many shares, long or short
+size = 10                        # shares per quote
+max_position = 100               # stop adding to a side at this many shares, long or short
 
 [output]
 pnl_sample_ms = 1_000
