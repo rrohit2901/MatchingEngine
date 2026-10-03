@@ -14,9 +14,9 @@ data**, replayed exactly through a **C++20 matching engine**.
 **Live demo: https://52-65-150-242.sslip.io** (temporary). Paste a strategy, pick the
 settings, and see the results in about 25 seconds.
 
-<!-- Screenshot of the web UI: save it as docs/img/ui.png and uncomment the next line.
-![The web UI](docs/img/ui.png)
--->
+![The web UI: settings in the sidebar, a strategy in the code editor, its parameters as TOML](docs/img/ui.png)
+
+![The results of a full-day run: PnL, Sharpe, fills and position, with equity, position, mid-price and fills-by-source charts](docs/img/results.png)
 
 ## Try it
 
