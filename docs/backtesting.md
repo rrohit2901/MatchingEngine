@@ -68,6 +68,7 @@ class JoinTheBid(Strategy):
 | `ctx.capital_deployed("BUY")` | dollars deployed on a side, as `max_capital` measures it |
 | `ctx.cash`, `ctx.pnl` | dollars; `pnl` = cash + position × the current mid − fees |
 | `ctx.fills` | `Fill`s since the previous callback |
+| `ctx.trades` | `Trade`s printed since the previous callback: the simulated market's tape (see below) |
 | `ctx.open_orders` | `Order`s that are `PENDING` (in flight) or `OPEN`, oldest first |
 | `ctx.order(id)` | one `Order`, any status |
 | `ctx.buy(price, qty)` / `ctx.sell(price, qty)` | limit order: trades what it can on arrival, rests the rest; returns its id |
@@ -84,6 +85,19 @@ class JoinTheBid(Strategy):
   `OPEN`, `FILLED`, `CANCELLED` and `REJECTED`.
 - **`Fill`** has `ts, order_id, side, price, quantity, maker, source`. `source`
   says how the fill happened; see [The model](#the-model).
+- **`Trade`** has `ts, price, quantity, aggressor, own, hidden`. The tape is the
+  market the strategy is actually in, not Nasdaq's original prints:
+  - every execution in the replayed book, one print per resting order hit. The
+    strategy's own trades are included with `own=True`.
+  - Nasdaq's hidden-liquidity executions, with `hidden=True`. No book shows them,
+    and the strategy can't affect them. A window that includes 09:30 or 16:00 also
+    prints the auction crosses this way.
+  - `aggressor` is `"BUY"` when a buyer took liquidity, `"SELL"` when a seller did,
+    and `None` when the feed doesn't say (most hidden prints).
+  - Where the strategy changed the book, the tape differs from Nasdaq's. A real
+    execution that hit the strategy first prints as the strategy's trade. An
+    aggressive strategy order prints a trade Nasdaq never saw. An execution that
+    found nothing left at its price in the replayed book doesn't print.
 
 ### What gets rejected
 
@@ -160,7 +174,7 @@ Set `[model] self_trade_prevention = true` to reject such orders instead.
 
 **What the replay cannot know or doesn't model:**
 - how other traders would have reacted to the strategy's orders
-- hidden liquidity
+- hidden liquidity (its executions are on `ctx.trades`, but a strategy can't trade with it)
 - other venues: this is Nasdaq's book only
 - trading halts: they aren't handled. The default window (09:31–15:59) keeps clear of
   the opening and closing auctions.
@@ -171,7 +185,16 @@ arrives at its price.
 ## Output
 
 `run` prints:
-- **PnL**, marked to mid, with fees.
+- **PnL**, marked to mid, with fees, split into **realized** and **unrealized**
+  (both before fees). Realized PnL uses average cost: a fill that reduces the
+  position realizes (price − average entry price) on what it closes. Unrealized is
+  the open position at the last mid against its average cost. So PnL = realized +
+  unrealized − fees.
+- **PnL per share traded:** PnL ÷ (shares bought + sold).
+- **Sharpe ratio:** the mean over the standard deviation of one-minute changes in
+  PnL, annualized by √(252 × 390). One day gives about 390 changes, so treat it as
+  a rough guide. It's `n/a` when `pnl_sample_ms` is over a minute, when the window
+  is under three minutes, or when PnL never moves.
 - **Max drawdown**, from the equity curve sampled every `pnl_sample_ms`.
 - **Position:** final, maximum long and maximum short.
 - **Volume:** shares bought and sold, and notional traded.

@@ -6,7 +6,8 @@ Backtest Python trading strategies against a full day of **real Nasdaq order-by-
 data**, replayed exactly through a **C++20 matching engine**.
 - Your orders join the real queues, get filled when real executions reach them, take real
   liquidity when they cross, and reach the exchange after a latency you choose.
-- You get PnL, drawdown, fills by source and the full order history.
+- You get PnL (realized and unrealized, per share), Sharpe, drawdown, fills by source
+  and the full order history.
 - Use it from the command line, from Python, or in the browser. In the browser every run
   is sandboxed.
 
@@ -112,8 +113,8 @@ Your orders live in the same book as the real ones. How they fill:
 
 ### 4. Strategy API and CLI
 - **API:** subclass `Strategy` and override `on_start`, `on_timer` or `on_end`. `ctx`
-  gives the book, your position, cash, PnL, capital deployed, new fills and open orders,
-  and `buy`, `sell` and `cancel`.
+  gives the book, the trade tape, your position, cash, PnL, capital deployed, new fills
+  and open orders, and `buy`, `sell` and `cancel`.
 - **CLI:** `me-backtest run` takes a TOML config, with any setting overridable by a flag.
   It prints a report and can write fills, orders and the equity curve as CSV, or JSON for
   programs.

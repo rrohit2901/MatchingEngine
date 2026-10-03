@@ -48,7 +48,7 @@ TICKS_PER_DOLLAR = 10_000
 NEW_YORK = ZoneInfo("America/New_York")
 
 __all__ = [
-    "BacktestConfig", "BacktestResult", "Context", "Fill", "Level", "Order", "Strategy", "run_backtest",
+    "BacktestConfig", "BacktestResult", "Context", "Fill", "Level", "Order", "Strategy", "Trade", "run_backtest",
 ]
 
 
@@ -97,6 +97,16 @@ class Fill(NamedTuple):
     source: str         # AGGRESSIVE, AHEAD_IN_QUEUE, SWEEP, CROSSING_ADD or SELF_TRADE
 
 
+class Trade(NamedTuple):
+    """A print on the simulated market's tape."""
+    ts: int                     # exchange time, UTC ns
+    price: float
+    quantity: int
+    aggressor: Optional[str]    # "BUY" (a buyer took liquidity), "SELL", or None if not known
+    own: bool                   # the strategy was on one side
+    hidden: bool                # Nasdaq's execution against hidden liquidity (no book shows it)
+
+
 class Order(NamedTuple):
     order_id: int
     side: str
@@ -118,6 +128,11 @@ def _order(t) -> Order:
     return Order(client_id, _side_name(side), to_dollars(price), quantity, filled, status, reason, sent, arrival)
 
 
+def _trade(t) -> Trade:
+    ts, price, quantity, aggressor, own, hidden = t
+    return Trade(ts, to_dollars(price), quantity, aggressor, own, hidden)
+
+
 def _fill(t) -> Fill:
     ts, client_id, side, price, quantity, maker, source = t
     return Fill(ts, client_id, _side_name(side), to_dollars(price), quantity, maker, source)
@@ -131,11 +146,13 @@ class Context:
         self.symbol = symbol
         self._fills_seen = 0
         self._new_fills: list[Fill] = []
+        self._new_trades: Optional[list[Trade]] = None   # fetched on first use in a callback
 
     def _advance(self) -> None:
         count = self._sim.fill_count
         self._new_fills = [_fill(f) for f in self._sim.fills(self._fills_seen)] if count > self._fills_seen else []
         self._fills_seen = count
+        self._new_trades = None
 
     # --- time ---------------------------------------------------------------
     @property
@@ -163,6 +180,17 @@ class Context:
     def best_ask(self) -> Optional[Level]:
         best = self._sim.best(OrderSide.SELL)
         return Level(to_dollars(best[0]), best[1]) if best else None
+
+    @property
+    def trades(self) -> list[Trade]:
+        """Prints since the previous callback, oldest first: every execution in the
+        replayed book (the strategy's own included, own=True) and Nasdaq's
+        hidden-liquidity executions (hidden=True)."""
+        # Built only when asked for: most strategies never read the tape, and the
+        # timer runs millions of times a day.
+        if self._new_trades is None:
+            self._new_trades = [_trade(t) for t in self._sim.recent_trades()]
+        return self._new_trades
 
     @property
     def mid(self) -> Optional[float]:
@@ -308,8 +336,48 @@ class BacktestResult:
     timings: dict[str, float] = field(default_factory=dict)
 
 
+def realized_pnl(fills: list[Fill]) -> float:
+    """Dollars realized by closing trades, at average cost and before fees: a fill that
+    reduces the position realizes (price - average entry) on what it closes."""
+    position, average, realized = 0, 0.0, 0.0
+    for f in fills:
+        signed = f.quantity if f.side == "BUY" else -f.quantity
+        if position == 0 or (position > 0) == (signed > 0):
+            average = (average * abs(position) + f.price * f.quantity) / (abs(position) + f.quantity)
+            position += signed
+            continue
+        closed = min(f.quantity, abs(position))
+        realized += closed * (f.price - average) * (1 if position > 0 else -1)
+        position += signed
+        if position == 0:
+            average = 0.0
+        elif (position > 0) == (signed > 0):   # flipped: the rest opens at this price
+            average = f.price
+    return realized
+
+
+SHARPE_BUCKET_NS = 60 * 1_000_000_000
+# One-minute returns scaled to a year: 252 trading days of 390 regular-session minutes.
+SHARPE_ANNUALIZATION = math.sqrt(252 * 390)
+
+
+def sharpe_1min(equity: list[tuple[int, int, float, Optional[float], float]], start_ns: int) -> Optional[float]:
+    """Annualized Sharpe ratio of the one-minute changes in equity (PnL), or None when
+    there are fewer than two minutes, the samples are sparser than a minute, or PnL never moved."""
+    closes: dict[int, float] = {}
+    for ts, _, _, _, value in equity:
+        closes[(ts - start_ns) // SHARPE_BUCKET_NS] = value   # the minute's last sample
+    minutes = sorted(closes)
+    if len(minutes) < 3 or any(b - a != 1 for a, b in zip(minutes, minutes[1:])):
+        return None
+    changes = [closes[b] - closes[a] for a, b in zip(minutes, minutes[1:])]
+    mean = sum(changes) / len(changes)
+    std = math.sqrt(sum((c - mean) ** 2 for c in changes) / (len(changes) - 1))
+    return mean / std * SHARPE_ANNUALIZATION if std > 0 else None
+
+
 def _summarise(sim: Simulator, fills: list[Fill], orders: list[Order],
-               equity: list[tuple[int, int, float, Optional[float], float]]) -> dict[str, Any]:
+               equity: list[tuple[int, int, float, Optional[float], float]], start_ns: int) -> dict[str, Any]:
     accepted = [o for o in orders if o.status != "REJECTED"]
     sent_qty = sum(o.quantity for o in accepted)
     filled_qty = sum(f.quantity for f in fills)
@@ -319,9 +387,18 @@ def _summarise(sim: Simulator, fills: list[Fill], orders: list[Order],
         peak = max(peak, value)
         drawdown = max(drawdown, peak - value)
     positions = [e[1] for e in equity] or [0]
+    pnl, fees = sim.mark_to_market(), sim.fees
+    realized = realized_pnl(fills)
+    traded = sum(f.quantity for f in fills)
     return {
-        "pnl": sim.mark_to_market(),
-        "fees": sim.fees,
+        "pnl": pnl,
+        # pnl = realized + unrealized - fees; unrealized is the open position at the
+        # last mid against its average cost.
+        "realized_pnl": realized,
+        "unrealized_pnl": pnl + fees - realized,
+        "pnl_per_share": pnl / traded if traded else 0.0,
+        "sharpe": sharpe_1min(equity, start_ns),
+        "fees": fees,
         "final_position": sim.position,
         "max_long": max(max(positions), 0),
         "max_short": min(min(positions), 0),
@@ -395,4 +472,5 @@ def run_backtest(strategy: Strategy, config: BacktestConfig, mbo: Optional[dict]
     stats = sim.stats()
     if on_progress is not None:
         on_progress(1.0)
-    return BacktestResult(config, _summarise(sim, fills, orders, equity), fills, orders, equity, stats, timings)
+    summary = _summarise(sim, fills, orders, equity, sim_config.trade_start_ns)
+    return BacktestResult(config, summary, fills, orders, equity, stats, timings)
