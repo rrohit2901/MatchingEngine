@@ -49,7 +49,7 @@ replay, simulator, CLI) and [`ui-plan.md`](ui-plan.md) (UI, sandbox, hosting). H
 | # | decision | why | who | status |
 |---|---|---|---|---|
 | 22 | Streamlit; results shown on the page; no email, no stored history | runs take ~25 s; a personal project | user | current |
-| 23 | Every non-strategy setting in the sidebar; defaults from `strategies/ob_alpha.toml` | the request | user | current |
+| 23 | Every non-strategy setting in the sidebar; defaults from `strategies/ob_alpha.toml` | the request | user | current (now from `quote_touch.toml`, with the same values; see 55) |
 | 24 | Runs on a background thread polled by a fragment | a widget change reruns the script and would otherwise abort a run | Claude | current |
 | 25 | No fills or orders tables; CSV downloads only | the page lagged | user | current |
 | 26 | Metrics in rows of 4 with compact values; charts thinned to ~1,500 points; mid chart's y-axis fitted to the data | values were cut off; charts were slow; the mid looked flat from $0 | user reported, Claude fixed | current |
@@ -90,6 +90,21 @@ replay, simulator, CLI) and [`ui-plan.md`](ui-plan.md) (UI, sandbox, hosting). H
 | 46 | Each release is checked in the sandbox before it goes live; switch via `/opt/me/current`; health check; automatic rollback; keep 3 | a broken build never goes live | proposed | current |
 | 47 | Wheels built on GitHub's ARM runner with `ME_NATIVE_ARCH=OFF` | the runner's CPU is newer than the Graviton2; `-march=native` could SIGILL | Claude | current |
 | 48 | GitHub `production` environment (deploys from `main` only); actions pinned to commit SHAs | public-repo safety | proposed | current |
+
+## Usability and metrics (2026-10-03)
+
+| # | decision | why | who | status |
+|---|---|---|---|---|
+| 49 | `ctx.pnl` marks at the current mid, not the last equity sample's | it could be up to `pnl_sample_ms` old inside `on_timer` | proposed (a bug) | current |
+| 50 | A non-whole quantity is rejected (`QUANTITY_NOT_INTEGER`), not truncated | consistent with off-grid prices (`PRICE_INCREMENT`) | user | current |
+| 51 | Every config key has a `me-backtest run` flag | the README said so; fees and order limits had none | proposed (a bug) | current |
+| 52 | `ctx.trades`: the tape of the simulated book (executions as reconciled, the strategy's own flagged `own`), plus Nasdaq's hidden prints flagged `hidden` | a tape of Nasdaq's real prints would contradict the simulation wherever the strategy changed the book | user (our book; hidden prints included) | current |
+| 53 | `ctx.trades` is built only when read | built every timer call, it cost 1–2 s on a full day | Claude; measured | current |
+| 54 | Realized/unrealized PnL at average cost; PnL per share traded; Sharpe of 1-minute PnL changes × √(252 × 390) | standard intraday conventions; Sharpe labelled as one day only | user (methods chosen from options) | current |
+| 55 | The page starts with a simple strategy (`quote_touch.py`); an example picker loads it or the order-book alpha | the alpha example overwhelms a first-time visitor | user | current |
+| 56 | Code editor: `streamlit-code-editor` (Ace), live autocompletion off | auto-indent; live completion took the Enter key while typing | user (editor); Claude (autocompletion, found in a browser test) | current |
+| 57 | Syntax errors are caught by compiling (never running) the code, before the rate limits and the queue | a typo shouldn't cost a slot or the cooldown | user | current |
+| 58 | Code and parameters kept in the visitor's browser (localStorage, via an inline `st.components.v2` script); nothing on the server | a reload lost the code | user | current |
 
 ## Open
 

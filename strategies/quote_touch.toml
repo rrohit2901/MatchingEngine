@@ -1,0 +1,47 @@
+# Backtest config for strategies/quote_touch.py. Every key is optional except
+# [data] date/symbol and [strategy] path; any of them can be overridden with a
+# me-backtest flag (me-backtest run --help).
+#
+#   me-backtest run --config strategies/quote_touch.toml
+
+[data]
+date = "2026-09-29"
+symbol = "AAPL"                  # one symbol per run: AAPL, NVDA or TSLA for this day
+dir = "data/databento"           # written by scripts/convert_mbo.py
+
+[session]
+start = "09:31:00"               # New York time; one minute clear of the opening auction
+end = "15:59:00"                 # stop before the closing auction; open orders are cancelled here
+timer_ms = 10                    # strategy callback interval, exchange time
+
+[latency]
+order_us = 50                    # strategy -> exchange
+market_data_us = 20              # exchange -> strategy; adds to the order delay
+
+[risk]
+max_position = 2_000             # shares, long or short, counting open orders; 0 = no limit
+max_capital = 0                  # dollars per side: position at mid + open orders at their prices; 0 = no limit
+max_order_qty = 10_000
+min_order_qty = 1
+max_price_deviation = 1.00       # dollars from the same-side best price
+
+[fees]
+maker = 0.0                      # dollars per share; negative = rebate (e.g. -0.0020)
+taker = 0.0                      # (e.g. 0.0030)
+
+[model]
+passive_impact = true            # passive fills come out of the venue order behind (see Simulator.h)
+self_trade_prevention = false    # Nasdaq's default: the strategy's own orders can trade with each other
+
+[strategy]
+path = "strategies/quote_touch.py"
+
+[strategy.params]
+size = 100                       # shares per quote
+max_position = 500               # stop adding to a side at this many shares, long or short
+
+[output]
+pnl_sample_ms = 1_000
+# fills_csv = "logs/quote_touch_fills.csv"
+# equity_csv = "logs/quote_touch_equity.csv"
+# orders_csv = "logs/quote_touch_orders.csv"

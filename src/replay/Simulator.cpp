@@ -123,6 +123,11 @@ void Simulator::finish(StrategyOrder& order, StrategyOrderStatus status) {
     live_ids.erase(order.client_id);
 }
 
+void Simulator::print(int price, int qty, OrderSide aggressor, bool own) {
+    if (qty <= 0 || clock < config.trade_start_ns) return;
+    tape_log.push_back({clock, price, qty, static_cast<uint8_t>(aggressor == OrderSide::BUY ? 'B' : 'A'), own, false});
+}
+
 int Simulator::cross(OrderSide incoming, int price, int qty, StrategyOrder* aggressor) {
     const OrderSide resting = opposite(incoming);
     const auto best = book.getBestPrice(resting);
@@ -135,6 +140,7 @@ int Simulator::cross(OrderSide incoming, int price, int qty, StrategyOrder* aggr
     for (const TradeEvent& trade : trade_scratch) {
         const order_id_t resting_id = resting == OrderSide::BUY ? trade.buy_id : trade.sell_id;
         StrategyOrder* maker = strategyAt(resting_id);
+        print(trade.trade_price, trade.trade_qty, incoming, aggressor || maker);
         if (aggressor && maker) {
             // Allowed self-trade (self_trade_prevention is off): book both sides.
             recordFill(*aggressor, trade.trade_qty, trade.trade_price, false, FillSource::SELF_TRADE);
@@ -184,6 +190,7 @@ void Simulator::venueFill(uint64_t venue_id, int size) {
     const auto named = v.engine_id ? std::find(queue_scratch.begin(), queue_scratch.end(), v.engine_id)
                                    : queue_scratch.end();
 
+    const OrderSide taker = opposite(v.side);
     int left = size;
     // 1. Strategy orders queued ahead of the named order would have been hit first,
     //    up to the size of the execution.
@@ -195,6 +202,7 @@ void Simulator::venueFill(uint64_t venue_id, int size) {
             const int price = order->price;
             const int take = reduce(*q, budget);
             recordFill(*order, take, price, true, FillSource::AHEAD_IN_QUEUE);
+            print(price, take, taker, true);
             stats.ahead_fill_qty += take;
             budget -= take;
         }
@@ -204,7 +212,9 @@ void Simulator::venueFill(uint64_t venue_id, int size) {
     }
     // 2. The named order itself.
     if (left > 0 && v.engine_id) {
-        left -= reduce(v.engine_id, left);
+        const int take = reduce(v.engine_id, left);
+        print(v.price, take, taker, false);
+        left -= take;
         if (liveQty(v.engine_id) == 0) v.engine_id = 0;
     }
     // 3. It had less left than the venue filled (the strategy took some): the real
@@ -216,10 +226,12 @@ void Simulator::venueFill(uint64_t venue_id, int size) {
                 const int price = order->price;
                 const int take = reduce(*q, left);
                 recordFill(*order, take, price, true, FillSource::SWEEP);
+                print(price, take, taker, true);
                 stats.sweep_qty += take;
                 left -= take;
             } else {
                 const int take = reduce(*q, left);
+                print(v.price, take, taker, false);
                 stats.sweep_qty += take;
                 left -= take;
             }
@@ -339,7 +351,16 @@ size_t Simulator::applyEvent(const MboEvents& events, size_t i) {
                 venueModify(venue_id, side, price, size);
                 break;
             case 'R': venueClear(); break;
-            case 'T': stats.venue.trades += 1; break;   // hidden executions have no F and change nothing
+            case 'T':
+                stats.venue.trades += 1;
+                // A visible execution's T is followed by its F, which prints from the
+                // book (venueFill). A T on its own is a hidden execution: it changes
+                // no book, but it was printed.
+                if ((i + 1 >= n || events.action[i + 1] != 'F') && clock >= config.trade_start_ns && size > 0) {
+                    const uint8_t aggressor = events.side[i] == 'B' || events.side[i] == 'A' ? events.side[i] : uint8_t{'N'};
+                    tape_log.push_back({clock, price, size, aggressor, false, true});
+                }
+                break;
             case 'F': venueFill(venue_id, size); break;
             case 'N': stats.venue.nones += 1; break;
             default: stats.venue.unknown_action += 1; break;
@@ -481,6 +502,7 @@ void Simulator::endOfTrading() {
     }
     in_flight.clear();
     recordEquity();
+    markTape();   // for on_end: the prints since the last timer
 }
 
 void Simulator::recordEquity() {
@@ -556,6 +578,7 @@ void Simulator::run(const MboEvents& events, const TimerFn& on_timer) {
                 while (next_sample <= clock) next_sample += config.pnl_sample_interval_ns;
             }
             stats.timer_calls += 1;
+            markTape();
             on_timer(*this);
             next_timer += config.timer_interval_ns;
         }

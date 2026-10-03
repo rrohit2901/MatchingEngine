@@ -206,3 +206,13 @@ def test_runner_refuses_a_limited_client(data_dir):
     bad = runner.run(settings(date="2020-01-01"), GOOD, {}, client="9.9.9.9")
     assert bad.error["kind"] == "invalid"
     assert runner.run(settings(), GOOD, {}, client="9.9.9.9").ok
+
+
+def test_syntax_error_is_caught_before_the_queue():
+    from webapp.runner import syntax_error
+    assert syntax_error("x = 1\n") is None
+    err = syntax_error("def f(:\n    pass\n")
+    assert err["kind"] == "strategy_load" and err["location"]["line"] == 1
+    err = syntax_error("if True:\nx = 1\n")
+    assert err["message"].startswith("IndentationError")
+    assert syntax_error("x = 1\0")["kind"] == "strategy_load"

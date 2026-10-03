@@ -117,6 +117,23 @@ def _plain(value: Any, depth: int = 0) -> bool:
     return False
 
 
+def syntax_error(code: str) -> Optional[dict[str, Any]]:
+    """The strategy's syntax error as a RunResult error (kind strategy_load), or None.
+
+    Only compiles, never runs, the code, so it is safe outside the sandbox and
+    lets the page report a typo at once instead of after a turn in the queue."""
+    try:
+        compile(code, "strategy.py", "exec", dont_inherit=True)
+    except SyntaxError as exc:   # IndentationError and TabError included
+        location = {"line": exc.lineno, "text": (exc.text or "").rstrip()} if exc.lineno else None
+        return {"kind": "strategy_load", "message": f"{type(exc).__name__}: {exc.msg}",
+                "location": location, "traceback": []}
+    except (ValueError, RecursionError, MemoryError) as exc:   # e.g. a null byte, absurd nesting
+        return {"kind": "strategy_load", "message": f"{type(exc).__name__}: {exc}", "location": None,
+                "traceback": []}
+    return None
+
+
 def validate(settings: Settings, code: str, params: dict[str, Any], data_dir: Path, limits: Limits) -> list[str]:
     """Every problem with a request, in words a visitor can act on. Empty means valid."""
     errors: list[str] = []
@@ -561,6 +578,10 @@ class Runner:
         if problems:
             return RunResult(False, error={"kind": "invalid", "message": " ".join(problems),
                                            "location": None, "traceback": []})
+        # Before the rate limits: a typo costs the visitor neither a slot nor the cooldown.
+        broken = syntax_error(code)
+        if broken:
+            return RunResult(False, error=broken)
         limited = client is not None and self.rate is not None
         if limited:
             refusal = self.rate.acquire(client)

@@ -12,6 +12,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // Phase 2: one strategy trading into a replayed Nasdaq book.
@@ -135,6 +136,18 @@ struct StrategyFill {
     FillSource source;
 };
 
+// One print on the simulated market's tape: an execution in the replayed book
+// (the strategy's included), or one of Nasdaq's hidden-liquidity executions,
+// which no book shows and the strategy cannot affect.
+struct TapeTrade {
+    uint64_t ts;
+    int price;
+    int quantity;
+    uint8_t aggressor;   // 'B' (a buyer took liquidity), 'A' (a seller did) or 'N' (not known)
+    bool own;            // the strategy was on one side (or both)
+    bool hidden;         // a Nasdaq execution against hidden liquidity: a T with no F
+};
+
 struct EquitySample {
     uint64_t ts;
     int64_t position;
@@ -204,6 +217,11 @@ class Simulator {
         // empty), minus fees, in dollars.
         double markToMarket() const;
         const std::vector<StrategyFill>& fills() const { return fill_log; }
+        // Every print inside the trading window, in time order.
+        const std::vector<TapeTrade>& tape() const { return tape_log; }
+        // [first, last) indices into tape() of the prints since the previous strategy
+        // callback, as of the current one (the timer, or the end of trading).
+        std::pair<size_t, size_t> recentTape() const { return {tape_from, tape_to}; }
         const std::unordered_map<uint64_t, StrategyOrder>& orders() const { return strategy_orders; }
         // Client ids of PENDING and OPEN orders, oldest first.
         const std::set<uint64_t>& liveOrderIds() const { return live_ids; }
@@ -251,6 +269,10 @@ class Simulator {
         int64_t open_sell_value = 0;      // for the capital limit
 
         std::vector<StrategyFill> fill_log;
+        std::vector<TapeTrade> tape_log;
+        size_t tape_from = 0;
+        size_t tape_to = 0;
+        void markTape() { tape_from = tape_to; tape_to = tape_log.size(); }
         std::vector<EquitySample> equity;
         SimStats stats;
 
@@ -293,6 +315,8 @@ class Simulator {
         // for a venue add (then any strategy order it hits is the maker).
         int cross(OrderSide incoming, int price, int qty, StrategyOrder* aggressor);
         void recordEquity();
+        // Appends a print to the tape, inside the trading window only.
+        void print(int price, int qty, OrderSide aggressor, bool own);
         // Twice the current mid in ticks; the last known one if a side is empty, 0 if never known.
         int currentMidX2() const;
         // capitalDeployed in 1e-4 $, with the position valued at `fallback_price` when no mid is known.

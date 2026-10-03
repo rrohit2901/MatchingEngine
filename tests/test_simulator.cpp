@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <tuple>
 #include <vector>
 
 // Phase 2: a strategy trading into the replayed book. Each test writes a short
@@ -391,6 +392,31 @@ TEST(Simulator, NonIntegerQuantityIsRecordedAsRejected) {
     EXPECT_EQ(sim.position(), 0);
     EXPECT_EQ(sim.getStats().orders_rejected, 1u);
     EXPECT_TRUE(sim.liveOrderIds().empty());
+}
+
+TEST(Simulator, TapePrintsExecutionsInTheReplayedBookAndHiddenOnes) {
+    Tape tape;
+    tape.rec(10, 'A', 'B', P, 100, 1).rec(10, 'A', 'A', P + CENT, 50, 2)
+        .exec(500, 'A', 'B', P, 10, 1)                      // before the window: not on the tape
+        .rec(1'500, 'A', 'B', P, 40, 3)                     // queued behind the strategy
+        .exec(2'500, 'A', 'B', P, 90, 1)                    // takes the rest of order 1
+        .exec(2'500, 'A', 'B', P, 20, 3)                    // reaches order 3: the strategy is hit first
+        .rec(2'600, 'T', 'N', P, 7, 0)                      // hidden execution: T with no F
+        .rec(5'000, 'N', 'N', 0, 0, 0);
+    SimConfig c = config(1'000, 1'000);
+    const Simulator sim = runWith(tape, c, 1'000, [](Simulator& s) {
+        s.submit(OrderSide::BUY, P, 30);                    // joins the bid behind order 1
+        s.submit(OrderSide::BUY, P + CENT, 5);              // lifts 5 of the offer
+    });
+    std::vector<std::tuple<uint64_t, int, int, char, bool, bool>> got;
+    for (const TapeTrade& t : sim.tape()) got.emplace_back(t.ts, t.price, t.quantity, static_cast<char>(t.aggressor), t.own, t.hidden);
+    using T = std::tuple<uint64_t, int, int, char, bool, bool>;
+    EXPECT_EQ(got, (std::vector<T>{
+        T{1'000, P + CENT, 5, 'B', true, false},             // the strategy's aggressive buy
+        T{2'500, P, 90, 'A', false, false},                  // order 1, as recorded
+        T{2'500, P, 20, 'A', true, false},                   // the strategy, ahead of order 3
+        T{2'600, P, 7, 'N', false, true},                    // hidden
+    }));
 }
 
 TEST(Simulator, ValidatorRunsOnTheSimulator) {
