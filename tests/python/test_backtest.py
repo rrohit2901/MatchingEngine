@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from matching_engine import cli
-from matching_engine.backtest import BacktestConfig, Strategy, run_backtest
+from matching_engine.backtest import BacktestConfig, Fill, Strategy, realized_pnl, run_backtest, sharpe_1min
 from matching_engine.replay import MBO_COLUMNS
 
 F_LAST = 128
@@ -280,3 +280,64 @@ def test_out_reports_config_failures(tmp_path):
     assert code == 2
     assert result["error"]["kind"] == "config"
     assert "empty" in result["error"]["message"]
+
+
+class WatchTape(Strategy):
+    def __init__(self):
+        super().__init__()
+        self.seen = []
+
+    def on_timer(self, ctx):
+        if not getattr(self, "sent", False):
+            self.sent = True
+            ctx.buy(ctx.best_ask.price, 30)
+        self.seen.extend(ctx.trades)
+
+
+def test_ctx_trades_shows_the_replayed_tape():
+    events = BOOK + execution(-500, "B", "A", 100.01, 10, 2)          # before the window: not shown
+    events += execution(1_000, "A", "B", 99.99, 40, 1)
+    events += [(1_200, "T", "N", 100.00, 7, 0, True)]                  # hidden: a T with no F
+    events += [(59_000, "N", "N", 0, 0, 0, True)]
+    strategy = WatchTape()
+    run_backtest(strategy, CONFIG, mbo=tape(events))
+    assert [(t.price, t.quantity, t.aggressor, t.own, t.hidden) for t in strategy.seen] == [
+        (100.01, 30, "BUY", True, False),     # the strategy lifting the offer
+        (99.99, 40, "SELL", False, False),    # a seller hitting the bid
+        (100.00, 7, None, False, True),
+    ]
+
+
+def _f(side, price, qty):
+    return Fill(0, 0, side, price, qty, True, "AGGRESSIVE")
+
+
+def test_realized_pnl_at_average_cost():
+    # Buy 100 @10 and 100 @12 (average 11), sell 150 @13: realizes 150 x 2.
+    assert realized_pnl([_f("BUY", 10, 100), _f("BUY", 12, 100), _f("SELL", 13, 150)]) == pytest.approx(300)
+    # A sell that flips the position closes 50 @ +1 and opens a short of 50 at 11;
+    # buying it back at 10 realizes 50 x 1 more.
+    assert realized_pnl([_f("BUY", 10, 50), _f("SELL", 11, 100), _f("BUY", 10, 50)]) == pytest.approx(100)
+    assert realized_pnl([]) == 0
+
+
+def test_sharpe_of_one_minute_changes():
+    start, minute = T0, 60 * 1_000_000_000
+    flat = [(start + i * minute, 0, 0.0, 100.0, 0.0) for i in range(5)]
+    assert sharpe_1min(flat, start) is None                            # PnL never moved
+    values = [0.0, 1.0, 3.0, 4.0, 6.0]                                  # changes 1, 2, 1, 2
+    curve = [(start + i * minute, 0, 0.0, 100.0, v) for i, v in enumerate(values)]
+    std = (sum((c - 1.5) ** 2 for c in (1, 2, 1, 2)) / 3) ** 0.5
+    assert sharpe_1min(curve, start) == pytest.approx(1.5 / std * (252 * 390) ** 0.5)
+    sparse = [(start + i * 2 * minute, 0, 0.0, 100.0, v) for i, v in enumerate(values)]
+    assert sharpe_1min(sparse, start) is None                          # samples further apart than a minute
+
+
+def test_pnl_splits_into_realized_unrealized_and_fees():
+    config = BacktestConfig(**{**CONFIG.__dict__, "taker_fee": 0.003})
+    result = run_backtest(LiftOnce(), config, mbo=tape(BOOK + [(59_000, "N", "N", 0, 0, 0, True)]))
+    s = result.summary
+    assert s["realized_pnl"] == 0                                       # nothing closed
+    assert s["unrealized_pnl"] == pytest.approx(-0.30)                  # 30 bought at 100.01, mid 100.00
+    assert s["pnl"] == pytest.approx(s["realized_pnl"] + s["unrealized_pnl"] - s["fees"])
+    assert s["pnl_per_share"] == pytest.approx(s["pnl"] / 30)

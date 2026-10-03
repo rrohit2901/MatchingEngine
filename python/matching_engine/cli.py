@@ -272,6 +272,9 @@ def print_report(result: BacktestResult, strategy_name: str, params: dict[str, A
 
     rows = [
         ("PnL (mark to mid)", f"${s['pnl']:,.2f}"),
+        ("realized / unrealized", f"${s['realized_pnl']:,.2f} / ${s['unrealized_pnl']:,.2f} (before fees)"),
+        ("PnL per share traded", f"${s['pnl_per_share']:,.4f}"),
+        ("Sharpe (1-min, annualized)", "n/a" if s["sharpe"] is None else f"{s['sharpe']:.2f} (one day: noisy)"),
         ("fees", f"${s['fees']:,.2f}"),
         ("max drawdown", f"${s['max_drawdown']:,.2f}"),
         ("final position", f"{s['final_position']:,} sh"),

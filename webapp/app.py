@@ -29,12 +29,13 @@ from zoneinfo import ZoneInfo
 import altair as alt
 import pandas as pd
 import streamlit as st
+from code_editor import code_editor
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))   # `streamlit run` puts webapp/ on the path, not the repo
 
 from webapp.runner import (IsolateBackend, Limits, LocalBackend, RateLimits, Runner, RunResult,  # noqa: E402
-                           Settings, Status, available_data)
+                           Settings, Status, available_data, syntax_error)
 
 try:
     import tomllib
@@ -42,8 +43,14 @@ except ModuleNotFoundError:   # Python < 3.11
     import tomli as tomllib
 
 DATA_DIR = Path(os.environ.get("ME_DATA_DIR", REPO / "data" / "databento"))
-EXAMPLE_CONFIG = REPO / "strategies" / "ob_alpha.toml"
-EXAMPLE_STRATEGY = REPO / "strategies" / "ob_alpha.py"
+STRATEGIES = REPO / "strategies"
+# Label -> strategies/<stem>.py and <stem>.toml. The first is what the page starts with,
+# and its config supplies the sidebar's defaults.
+EXAMPLES = {
+    "Quote the touch (simple)": "quote_touch",
+    "Order-book alpha": "ob_alpha",
+}
+DEFAULT_EXAMPLE = next(iter(EXAMPLES))
 NEW_YORK = ZoneInfo("America/New_York")
 
 st.set_page_config(page_title="Nasdaq replay backtester", page_icon="📈", layout="wide")
@@ -76,9 +83,16 @@ def client_ip() -> str:
 
 
 @st.cache_data
+def example(name: str) -> tuple[str, str, dict]:
+    """(code, parameters as TOML, the whole config) of one of EXAMPLES."""
+    stem = STRATEGIES / EXAMPLES[name]
+    with open(stem.with_suffix(".toml"), "rb") as fh:
+        config = tomllib.load(fh)
+    return stem.with_suffix(".py").read_text(), toml_params(config.get("strategy", {}).get("params", {})), config
+
+
 def example_config() -> dict:
-    with open(EXAMPLE_CONFIG, "rb") as fh:
-        return tomllib.load(fh)
+    return example(DEFAULT_EXAMPLE)[2]
 
 
 def toml_params(params: dict) -> str:
@@ -190,6 +204,7 @@ Constructor keyword arguments are the parameters below.
 | `ctx.position`, `ctx.cash`, `ctx.pnl` | shares; dollars; cash + position × mid − fees |
 | `ctx.capital_deployed("BUY")` | dollars on a side, as the capital limit measures it |
 | `ctx.fills` | fills since the previous call |
+| `ctx.trades` | the tape since the previous call: `Trade(ts, price, quantity, aggressor, own, hidden)` |
 | `ctx.open_orders`, `ctx.order(id)` | `Order`s: status, filled, remaining, … |
 | `ctx.buy(price, qty)`, `ctx.sell(price, qty)` | limit orders on the one-cent grid; return an id |
 | `ctx.cancel(id)`, `ctx.cancel_all()` | cancels travel with the latency too |
@@ -200,25 +215,96 @@ Orders reach the exchange after market-data + order latency. Rejections show up 
 """
 
 
+# The visitor's code and parameters live in their own browser (localStorage), so a
+# reload doesn't lose them. Nothing is stored on the server. The script answers
+# {"load": true} with the saved draft (an empty object if there is none) and
+# saves whatever {"save": ...} it is given.
+DRAFT_KEY = "me-backtester-draft-v1"
+DRAFT_JS = """
+export default function({ data, setStateValue }) {
+    const KEY = "%s";
+    if (!data) return;
+    if (data.save) {
+        try { localStorage.setItem(KEY, JSON.stringify(data.save)); } catch (e) {}
+    } else if (data.load) {
+        let draft = null;
+        try { draft = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+        setStateValue("draft", draft && typeof draft === "object" ? draft : {});
+    }
+}
+""" % DRAFT_KEY
+draft_store = st.components.v2.component("draft_store", js=DRAFT_JS)
+
+EDITOR_LINES = 24
+
+
+def load_code(code: str, params: str | None = None) -> None:
+    """Put new code (and parameters) in the editor. Must run before the widgets render.
+
+    The editor is given only the code it was last loaded with, never what the
+    visitor has typed since: it resets its content whenever that argument
+    changes, which would throw away keystrokes made while a rerun was under way.
+    A new key remounts it with the new code instead."""
+    st.session_state.code = code
+    st.session_state.editor_source = code
+    st.session_state.editor_version = st.session_state.get("editor_version", 0) + 1
+    if params is not None:
+        st.session_state.params = params
+
+
+def restore_draft() -> None:
+    """Load the browser's saved draft once per session; afterwards keep it saved."""
+    if st.session_state.get("draft_state") == "loading":
+        answer = draft_store(data={"load": True}, key="draft_store", on_draft_change=lambda: None)
+        draft = getattr(answer, "draft", None)   # None until the browser has answered
+        if draft is not None:
+            st.session_state.draft_state = "ready"
+            code, params = draft.get("code"), draft.get("params")
+            if isinstance(code, str) and code.strip():
+                load_code(code, params if isinstance(params, str) else None)
+    else:
+        draft_store(data={"save": {"code": st.session_state.code, "params": st.session_state.get("params", "")}},
+                    key="draft_store")
+
+
 def strategy_inputs() -> tuple[str, str]:
     if "code" not in st.session_state:
-        st.session_state.code = EXAMPLE_STRATEGY.read_text()
-        st.session_state.params = toml_params(example_config().get("strategy", {}).get("params", {}))
+        code, params, _ = example(DEFAULT_EXAMPLE)
+        load_code(code, params)
+        st.session_state.draft_state = "loading"
+    restore_draft()
+
+    c1, c2, _ = st.columns([2, 1, 2], vertical_alignment="bottom")
+    chosen = c1.selectbox("Example strategy", list(EXAMPLES), key="example")
+    if c2.button("Load example", help="Replaces the code and parameters below with the example's."):
+        code, params, _ = example(chosen)
+        load_code(code, params)
 
     uploaded = st.file_uploader("Load a strategy file (.py)", type=["py"])
     if uploaded is not None and st.session_state.get("uploaded_name") != uploaded.name + str(uploaded.size):
-        st.session_state.code = uploaded.getvalue().decode(errors="replace")
         st.session_state.uploaded_name = uploaded.name + str(uploaded.size)
+        load_code(uploaded.getvalue().decode(errors="replace"))
 
     left, right = st.columns([3, 1])
     with left:
-        code = st.text_area("Strategy code", key="code", height=460)
+        st.markdown("**Strategy code**")
+        # Sends the code back 250 ms after typing stops, and when the editor loses
+        # focus (so clicking Run always runs what is on screen).
+        response = code_editor(st.session_state.editor_source, lang="python", height=EDITOR_LINES,
+                               key=f"editor-{st.session_state.editor_version}",
+                               response_mode=["debounce", "blur"],
+                               options={"tabSize": 4, "useSoftTabs": True, "showPrintMargin": False},
+                               # Live completion pops up while typing and takes the Enter key.
+                               props={"enableLiveAutocompletion": False, "enableSnippets": False})
+        if response and response.get("id"):   # empty until the visitor edits
+            st.session_state.code = response["text"]
     with right:
         params = st.text_area("Parameters (TOML)", key="params", height=460,
                               help="Passed to your Strategy's constructor as keyword arguments.")
+    st.caption("Your code and parameters are kept in this browser, so a reload doesn't lose them.")
     with st.expander("How to write a strategy"):
         st.markdown(STRATEGY_HELP)
-    return code, params
+    return st.session_state.code, params
 
 
 # --- results ---------------------------------------------------------------------
@@ -348,7 +434,17 @@ def show_result(result: RunResult, label: str = "") -> None:
 
     cols = st.columns(4)
     cols[0].metric("PnL (marked to mid)", money(s["pnl"]))
-    cols[1].metric("Max drawdown", money(s["max_drawdown"]))
+    cols[1].metric("Realized", money(s["realized_pnl"]), help="Closed trades at average cost, before fees.")
+    cols[2].metric("Unrealized", money(s["unrealized_pnl"]),
+                   help="The open position at the last mid against its average cost, before fees.")
+    cols[3].metric("Max drawdown", money(s["max_drawdown"]))
+    cols = st.columns(4)
+    per_share = s["pnl_per_share"]
+    cols[0].metric("PnL per share", f"{'-' if per_share < 0 else ''}${abs(per_share):,.4f}",
+                   help="PnL ÷ shares bought and sold.")
+    cols[1].metric("Sharpe (1-min, annualized)", "n/a" if s["sharpe"] is None else f"{s['sharpe']:,.2f}",
+                   help="Mean ÷ standard deviation of one-minute PnL changes, × √(252 × 390). "
+                        "One day is about 390 changes: a rough guide only.")
     cols[2].metric("Final position", f"{count(s['final_position'])} sh")
     cols[3].metric("Fills", count(s["fills"]))
     cols = st.columns(4)
@@ -432,22 +528,30 @@ def main() -> None:
                                "Without one, the heading is your Strategy class's name.")
     c1, c2 = st.columns([1, 4])
     clicked = c1.button("Run backtest", type="primary", disabled=job is not None or settings is None,
-                        width="stretch")
+                        width="stretch", key="run")
     lim, rate = runner().limits, runner().rate.limits
     c2.caption(f"Server: {running} running, {waiting} waiting. Per visitor: one run at a time, "
                f"{rate.cooldown_s:g} s apart, up to {rate.per_hour} an hour. "
                f"Each run is limited to {lim.wall_s:g} s and {lim.memory_mb / 1024:.1f} GB.")
 
     if clicked and job is None and settings is not None:
+        broken = syntax_error(code)
+        params = None
         try:
             params = tomllib.loads(params_text)
         except tomllib.TOMLDecodeError as exc:
             st.error(f"The parameters are not valid TOML: {exc}")
-        else:
+        # A syntax error is shown at once (no queue, no cooldown) and stays up until the
+        # code changes: the editor's own update can rerun the page right after the click.
+        st.session_state.syntax_error = (code, broken) if broken else None
+        if not broken and params is not None:
             st.session_state.pop("notice", None)
             st.session_state.job = Job(settings, code, params, client_ip(), clean_label(label))
             st.rerun()
 
+    shown = st.session_state.get("syntax_error")
+    if shown and shown[0] == code:
+        show_error(RunResult(False, error=shown[1]))
     if "notice" in st.session_state:
         st.warning(st.session_state.notice)
     progress_panel()

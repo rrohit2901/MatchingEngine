@@ -20,8 +20,10 @@ test = ["pytest>=7", "numpy", "pyarrow>=14", "tomli>=1.1; python_version < '3.11
 data = ["databento>=0.40", "pyarrow>=14", "numpy"]
 # me-backtest: reading the converted Parquet data and the TOML config
 backtest = ["pyarrow>=14", "numpy", "tomli>=1.1; python_version < '3.11'"]
-# webapp/ (streamlit run webapp/app.py): the backtest dependencies plus the UI
-web = ["pyarrow>=14", "numpy", "tomli>=1.1; python_version < '3.11'", "streamlit>=1.37", "pandas"]
+# webapp/ (streamlit run webapp/app.py): the backtest dependencies plus the UI.
+# Streamlit 1.51 is the first with st.components.v2 (the browser-side draft store).
+web = ["pyarrow>=14", "numpy", "tomli>=1.1; python_version < '3.11'", "streamlit>=1.51", "pandas",
+       "streamlit-code-editor>=0.1.22"]
 
 [project.scripts]
 me-backtest = "matching_engine.cli:main"

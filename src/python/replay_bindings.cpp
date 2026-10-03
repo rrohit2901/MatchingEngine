@@ -142,6 +142,13 @@ py::tuple fillTuple(const StrategyFill& f) {
     return py::make_tuple(f.ts, f.client_id, f.side, f.price, f.quantity, f.maker, to_string(f.source));
 }
 
+py::tuple tapeTuple(const TapeTrade& t) {
+    py::object aggressor = py::none();
+    if (t.aggressor == 'B') aggressor = py::str("BUY");
+    else if (t.aggressor == 'A') aggressor = py::str("SELL");
+    return py::make_tuple(t.ts, t.price, t.quantity, aggressor, t.own, t.hidden);
+}
+
 py::list levels(const std::vector<LevelView>& view) {
     py::list out;
     for (const LevelView& level : view) out.append(py::make_tuple(level.price, level.quantity));
@@ -225,6 +232,21 @@ class. Prices here are int ticks of 1e-4 $, times are UTC nanoseconds.
                  return out;
              }, py::arg("start") = 0,
              "Fills from index `start` on, as (ts, client_id, side, price, quantity, maker, source).")
+        .def_property_readonly("trade_count", [](const Simulator& s) { return s.tape().size(); })
+        .def("trades", [](const Simulator& s, size_t start) {
+                 py::list out;
+                 const auto& all = s.tape();
+                 for (size_t i = start; i < all.size(); ++i) out.append(tapeTuple(all[i]));
+                 return out;
+             }, py::arg("start") = 0,
+             "Tape prints from index `start` on, as (ts, price, quantity, aggressor, own, hidden); "
+             "aggressor is 'BUY', 'SELL' or None.")
+        .def("recent_trades", [](const Simulator& s) {
+                 py::list out;
+                 const auto [first, last] = s.recentTape();
+                 for (size_t i = first; i < last; ++i) out.append(tapeTuple(s.tape()[i]));
+                 return out;
+             }, "Tape prints since the previous strategy callback, as trades() returns them.")
         .def("order", [](const Simulator& s, uint64_t client_id) -> py::object {
                  const auto it = s.orders().find(client_id);
                  if (it == s.orders().end()) return py::none();

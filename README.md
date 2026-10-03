@@ -6,7 +6,8 @@ Backtest Python trading strategies against a full day of **real Nasdaq order-by-
 data**, replayed exactly through a **C++20 matching engine**.
 - Your orders join the real queues, get filled when real executions reach them, take real
   liquidity when they cross, and reach the exchange after a latency you choose.
-- You get PnL, drawdown, fills by source and the full order history.
+- You get PnL (realized and unrealized, per share), Sharpe, drawdown, fills by source
+  and the full order history.
 - Use it from the command line, from Python, or in the browser. In the browser every run
   is sandboxed.
 
@@ -19,12 +20,13 @@ settings, and see the results in about 25 seconds.
 
 ## Try it
 
-**In the browser:** open the live demo. The example strategy is already in the editor.
+**In the browser:** open the live demo. A simple example strategy is already in the editor.
 
 **On your machine,** after getting the data once ([Market data](#1-market-data)):
 ```bash
 pip install '.[backtest]'
-me-backtest run --config strategies/ob_alpha.toml                       # the example strategy, AAPL
+me-backtest run --config strategies/quote_touch.toml                    # the simple example, AAPL
+me-backtest run --config strategies/ob_alpha.toml                       # the order-book alpha example
 me-backtest run --strategy my_strategy.py --symbol NVDA --order-latency-us 100
 
 pip install '.[web]'
@@ -112,8 +114,8 @@ Your orders live in the same book as the real ones. How they fill:
 
 ### 4. Strategy API and CLI
 - **API:** subclass `Strategy` and override `on_start`, `on_timer` or `on_end`. `ctx`
-  gives the book, your position, cash, PnL, capital deployed, new fills and open orders,
-  and `buy`, `sell` and `cancel`.
+  gives the book, the trade tape, your position, cash, PnL, capital deployed, new fills
+  and open orders, and `buy`, `sell` and `cancel`.
 - **CLI:** `me-backtest run` takes a TOML config, with any setting overridable by a flag.
   It prints a report and can write fills, orders and the equity curve as CSV, or JSON for
   programs.
@@ -125,10 +127,13 @@ Your orders live in the same book as the real ones. How they fill:
 ### 5. Web UI and sandbox
 - **Streamlit:**
   - every setting in a sidebar
-  - a strategy editor (or `.py` upload) with its parameters as TOML, and an optional
-    run label
-  - results on the page: metrics, equity, position and mid charts, fills by source,
-    rejects, CSV downloads
+  - a code editor (auto-indent, Python highlighting) or a `.py` upload, with the
+    strategy's parameters as TOML and an optional run label
+  - two examples to start from, a simple quoter and the order-book alpha
+  - the code is checked for syntax errors before it queues, and kept in the visitor's
+    browser across reloads
+  - results on the page: PnL (realized and unrealized, per share), Sharpe and other
+    metrics; equity, position and mid charts; fills by source, rejects, CSV downloads
 - **Each run is a separate process in an [isolate](https://github.com/ioi/isolate) box**
   (the sandbox competitive-programming judges use):
   - no network, its own user, an empty environment
@@ -222,7 +227,7 @@ include/data_structures/ lock-free SPSC ring, lock queue
 include/event_handler/   the logger thread
 src/python/              pybind11 bindings
 python/matching_engine/  Python package: bindings, data loaders, backtest API, me-backtest CLI
-strategies/              example strategy (ob_alpha.py) and its config
+strategies/              example strategies (quote_touch.py, ob_alpha.py) and their configs
 webapp/                  Streamlit UI and the sandboxed run queue
 deploy/                  server provisioning, release installer, CI deploy entry points
 scripts/                 Databento download, conversion, checks
