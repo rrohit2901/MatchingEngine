@@ -66,7 +66,7 @@ class JoinTheBid(Strategy):
 | `ctx.best_bid`, `ctx.best_ask`, `ctx.mid` | `Level` or `None`; mid as a float or `None` |
 | `ctx.position` | shares, + long / − short |
 | `ctx.capital_deployed("BUY")` | dollars deployed on a side, as `max_capital` measures it |
-| `ctx.cash`, `ctx.pnl` | dollars; `pnl` = cash + position × mid − fees |
+| `ctx.cash`, `ctx.pnl` | dollars; `pnl` = cash + position × the current mid − fees |
 | `ctx.fills` | `Fill`s since the previous callback |
 | `ctx.open_orders` | `Order`s that are `PENDING` (in flight) or `OPEN`, oldest first |
 | `ctx.order(id)` | one `Order`, any status |
@@ -75,6 +75,8 @@ class JoinTheBid(Strategy):
 
 - **Prices** are dollars on the one-cent grid. An off-grid price is rejected
   (`PRICE_INCREMENT`), never rounded.
+- **Quantities** are whole shares. `100` and `100.0` are fine; `100.7` is rejected
+  (`QUANTITY_NOT_INTEGER`), never truncated.
 - **The book** includes the strategy's own resting orders, as a real feed would
   show them.
 - **`Order`** has `order_id, side, price, quantity, filled, remaining,
@@ -88,6 +90,7 @@ class JoinTheBid(Strategy):
 | reason | where | when |
 |---|---|---|
 | `PRICE_INCREMENT` | gateway, immediately | price not a whole cent |
+| `QUANTITY_NOT_INTEGER` | gateway, immediately | quantity not a whole number of shares |
 | `POSITION_LIMIT` | gateway, immediately | `[risk] max_position` exceeded, counting every open order on that side as if filled |
 | `CAPITAL_LIMIT` | gateway, immediately | `[risk] max_capital` exceeded: dollars deployed on that side, which is the position at the current mid plus every open order on the side at its limit price, plus this order. Orders that reduce the position are never blocked. |
 | `OUTSIDE_TRADING_WINDOW` | gateway, immediately | sent outside `[session]` start–end |

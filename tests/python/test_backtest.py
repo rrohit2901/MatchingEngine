@@ -79,6 +79,45 @@ def test_passive_order_is_filled_when_executions_reach_it():
     assert result.stats["orphaned_orders"] == 0
 
 
+class OddQuantities(Strategy):
+    def on_timer(self, ctx):
+        if not getattr(self, "sent", False):
+            self.sent = True
+            ask = ctx.best_ask.price
+            self.ids = [ctx.buy(ask, 10.5), ctx.buy(ask, 10.0), ctx.buy(ask, np.int64(5)), ctx.buy(ask, "7")]
+
+
+def test_non_integer_quantity_is_rejected_not_truncated():
+    strategy = OddQuantities()
+    result = run_backtest(strategy, CONFIG, mbo=tape(BOOK + [(59_000, "N", "N", 0, 0, 0, True)]))
+    orders = {o.order_id: o for o in result.orders}
+    half, whole, numpy_int, text = (orders[i] for i in strategy.ids)
+    assert (half.status, half.reject_reason, half.quantity) == ("REJECTED", "QUANTITY_NOT_INTEGER", 10)
+    assert (text.status, text.reject_reason) == ("REJECTED", "QUANTITY_NOT_INTEGER")
+    assert (whole.status, whole.filled) == ("FILLED", 10)
+    assert (numpy_int.status, numpy_int.filled) == ("FILLED", 5)
+    assert result.summary["final_position"] == 15
+
+
+class StaleMid(Strategy):
+    """Buys at the first timer, then records ctx.pnl once the ask has moved."""
+    def on_timer(self, ctx):
+        if not getattr(self, "sent", False):
+            self.sent = True
+            ctx.buy(ctx.best_ask.price, 10)
+        elif ctx.best_ask.price == 100.05 and not hasattr(self, "pnl"):
+            self.pnl = ctx.pnl
+
+
+def test_pnl_uses_the_current_mid_not_the_last_sample():
+    events = BOOK + [(500, "C", "A", 100.01, 90, 2, True), (500, "A", "A", 100.05, 100, 3, True),
+                     (59_000, "N", "N", 0, 0, 0, True)]
+    strategy = StaleMid()
+    run_backtest(strategy, CONFIG, mbo=tape(events))     # equity sampled every 1 s
+    # Bought 10 at 100.01; at 600 ms the mid is 100.02 (99.99 / 100.05).
+    assert strategy.pnl == pytest.approx(0.10)
+
+
 def test_cli_runs_a_strategy_file_with_overrides(tmp_path, capsys):
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -117,11 +156,12 @@ def test_cli_runs_a_strategy_file_with_overrides(tmp_path, capsys):
     """))
     fills_csv = tmp_path / "fills.csv"
     code = cli.main(["run", "--config", str(tmp_path / "bt.toml"), "--param", "qty=25",
-                     "--order-latency-us", "5", "--fills-csv", str(fills_csv)])
+                     "--order-latency-us", "5", "--taker-fee", "0.004", "--fills-csv", str(fills_csv)])
 
     assert code == 0
     out = capsys.readouterr().out
     assert "Lift on TEST" in out and "qty=25" in out
+    assert "$0.10" in out                                  # --taker-fee 0.004 on 25 shares
     rows = list(csv.DictReader(open(fills_csv)))
     assert [(r["side"], r["quantity"], r["source"]) for r in rows] == [("BUY", "25", "AGGRESSIVE")]
 

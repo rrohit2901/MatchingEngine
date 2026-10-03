@@ -123,8 +123,10 @@ def build_run(args: argparse.Namespace) -> tuple[BacktestConfig, type[Strategy],
     overrides = {
         "date": args.date, "symbol": args.symbol, "data_dir": args.data, "start": args.start, "end": args.end,
         "timer_ms": args.timer_ms, "order_latency_us": args.order_latency_us, "md_latency_us": args.md_latency_us,
-        "max_position": args.max_position, "max_capital": args.max_capital, "passive_impact": args.passive_impact,
-        "self_trade_prevention": args.self_trade_prevention,
+        "max_position": args.max_position, "max_capital": args.max_capital, "max_order_qty": args.max_order_qty,
+        "min_order_qty": args.min_order_qty, "max_price_deviation": args.max_price_deviation,
+        "maker_fee": args.maker_fee, "taker_fee": args.taker_fee, "pnl_sample_ms": args.pnl_sample_ms,
+        "passive_impact": args.passive_impact, "self_trade_prevention": args.self_trade_prevention,
     }
     settings.update({k: v for k, v in overrides.items() if v is not None})
     if args.strategy:
@@ -412,6 +414,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--md-latency-us", type=float)
     run.add_argument("--max-position", type=int)
     run.add_argument("--max-capital", type=float, help="dollars deployed per side; 0 = no limit")
+    run.add_argument("--max-order-qty", type=int)
+    run.add_argument("--min-order-qty", type=int)
+    run.add_argument("--max-price-deviation", type=float, help="dollars from the same-side best price")
+    run.add_argument("--maker-fee", type=float, help="dollars per share; negative = rebate")
+    run.add_argument("--taker-fee", type=float, help="dollars per share; negative = rebate")
+    run.add_argument("--pnl-sample-ms", type=float, help="equity curve sample interval")
     run.add_argument("--passive-impact", action=argparse.BooleanOptionalAction, default=None,
                      help="take passive strategy fills out of the venue order behind (default on)")
     run.add_argument("--self-trade-prevention", action=argparse.BooleanOptionalAction, default=None,
