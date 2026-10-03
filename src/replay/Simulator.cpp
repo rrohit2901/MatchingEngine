@@ -352,7 +352,7 @@ size_t Simulator::applyEvent(const MboEvents& events, size_t i) {
 
 // --- strategy ------------------------------------------------------------------
 
-uint64_t Simulator::submit(OrderSide side, int price, int quantity) {
+StrategyOrder& Simulator::newOrder(OrderSide side, int price, int quantity) {
     StrategyOrder order{};
     order.client_id = next_client_id++;
     order.side = side;
@@ -360,6 +360,19 @@ uint64_t Simulator::submit(OrderSide side, int price, int quantity) {
     order.quantity = quantity;
     order.ts_sent = clock;
     stats.orders_submitted += 1;
+    return strategy_orders.emplace(order.client_id, order).first->second;
+}
+
+uint64_t Simulator::rejectNonIntegerQuantity(OrderSide side, int price, int quantity) {
+    StrategyOrder& order = newOrder(side, price, quantity);
+    order.reject_reason = "QUANTITY_NOT_INTEGER";
+    order.status = StrategyOrderStatus::REJECTED;
+    stats.orders_rejected += 1;
+    return order.client_id;
+}
+
+uint64_t Simulator::submit(OrderSide side, int price, int quantity) {
+    StrategyOrder& stored = newOrder(side, price, quantity);
 
     // Checks the strategy's own gateway would make before sending.
     const char* reason = nullptr;
@@ -376,8 +389,6 @@ uint64_t Simulator::submit(OrderSide side, int price, int quantity) {
         if (after > config.max_capital * 10'000.0) reason = "CAPITAL_LIMIT";
     }
 
-    auto [it, inserted] = strategy_orders.emplace(order.client_id, order);
-    StrategyOrder& stored = it->second;
     if (reason) {
         stored.reject_reason = reason;
         stored.status = StrategyOrderStatus::REJECTED;
@@ -501,7 +512,8 @@ double Simulator::capitalDeployed(OrderSide side) const {
 
 double Simulator::markToMarket() const {
     // cash and position x mid are both in 1e-4 $; mid_x2 is twice the mid.
-    const double value_ticks = static_cast<double>(cash) + static_cast<double>(pos) * last_mid_x2 / 2.0;
+    // The current mid, not the last equity sample's: a strategy reads this every timer call.
+    const double value_ticks = static_cast<double>(cash) + static_cast<double>(pos) * currentMidX2() / 2.0;
     return value_ticks / 10'000.0 - fee_total;
 }
 

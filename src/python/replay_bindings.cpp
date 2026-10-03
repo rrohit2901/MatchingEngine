@@ -197,6 +197,8 @@ class. Prices here are int ticks of 1e-4 $, times are UTC nanoseconds.
              "Replay the MBO columns, calling on_timer() every timer interval in the trading window.")
         .def("submit", &Simulator::submit, py::arg("side"), py::arg("price"), py::arg("quantity"),
              "Limit order; returns its client id. It reaches the exchange after the latency.")
+        .def("reject_non_integer_quantity", &Simulator::rejectNonIntegerQuantity, py::arg("side"), py::arg("price"),
+             py::arg("quantity"), "Record an order refused because its quantity was not whole; returns its client id.")
         .def("cancel", &Simulator::cancel, py::arg("client_id"))
         .def("cancel_all", &Simulator::cancelAll)
         .def_property_readonly("now", &Simulator::now)

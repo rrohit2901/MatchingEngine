@@ -31,6 +31,8 @@ docs/strategy-replay-plan.md):
 
 from __future__ import annotations
 
+import math
+import operator
 import time
 from dataclasses import dataclass, field
 from datetime import date as Date
@@ -56,6 +58,19 @@ def to_ticks(price: float) -> int:
 
 def to_dollars(ticks: int) -> float:
     return ticks / TICKS_PER_DOLLAR
+
+
+def _whole_shares(quantity: Any) -> Optional[int]:
+    """`quantity` as an int if it is a whole number of shares (100, 100.0, numpy ints), else None."""
+    if isinstance(quantity, bool):
+        return None
+    try:
+        return operator.index(quantity)
+    except TypeError:
+        pass
+    if isinstance(quantity, float) and math.isfinite(quantity) and quantity.is_integer():
+        return int(quantity)
+    return None
 
 
 def _side_name(side: OrderSide) -> str:
@@ -191,11 +206,21 @@ class Context:
     def buy(self, price: float, quantity: int) -> int:
         """Limit buy: trades what it can on arrival, rests the rest. Returns the order id;
         check ctx.order(id) for its status."""
-        return self._sim.submit(OrderSide.BUY, to_ticks(price), int(quantity))
+        return self._submit(OrderSide.BUY, price, quantity)
 
     def sell(self, price: float, quantity: int) -> int:
         """Limit sell. Returns the order id."""
-        return self._sim.submit(OrderSide.SELL, to_ticks(price), int(quantity))
+        return self._submit(OrderSide.SELL, price, quantity)
+
+    def _submit(self, side: OrderSide, price: float, quantity: Any) -> int:
+        shares = _whole_shares(quantity)
+        if shares is None:
+            # Rejected like an off-grid price, never truncated.
+            # The order record shows the whole part where it fits, else 0.
+            fits = isinstance(quantity, float) and math.isfinite(quantity) and abs(quantity) < 2**31
+            shown = int(quantity) if fits else 0
+            return self._sim.reject_non_integer_quantity(side, to_ticks(price), shown)
+        return self._sim.submit(side, to_ticks(price), shares)
 
     def cancel(self, order_id: int) -> bool:
         """Request a cancel. False if the order is unknown or already done."""

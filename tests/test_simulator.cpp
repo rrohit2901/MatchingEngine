@@ -360,6 +360,39 @@ TEST(Simulator, TradingWindowAndMarkToMarket) {
     EXPECT_NEAR(sim.markToMarket(), -0.04, 1e-9);
 }
 
+TEST(Simulator, MarkToMarketUsesTheCurrentMidBetweenSamples) {
+    Tape tape;
+    tape.rec(10, 'A', 'B', P - CENT, 10, 1).rec(10, 'A', 'A', P + CENT, 10, 2)
+        .rec(1'500, 'C', 'A', P + CENT, 6, 2)            // the strategy took 4; the rest leaves
+        .rec(1'500, 'A', 'A', P + 5 * CENT, 10, 3)       // the ask moves up: mid 100.02
+        .rec(5'000, 'N', 'N', 0, 0, 0);
+    SimConfig c = config(1'000, 1'000);
+    c.pnl_sample_interval_ns = 1'000'000;                // one equity sample, at the start
+    std::vector<double> pnl;
+    Simulator sim(c);
+    sim.run(tape.events(), [&](Simulator& s) {
+        if (s.now() == 1'000) s.submit(OrderSide::BUY, P + CENT, 4);
+        pnl.push_back(s.markToMarket());
+    });
+    ASSERT_GE(pnl.size(), 2u);
+    // Bought 4 at 100.01; at 2'000 the mid is 100.02, not the 100.00 of the last sample.
+    EXPECT_NEAR(pnl[1], 0.04, 1e-9);
+}
+
+TEST(Simulator, NonIntegerQuantityIsRecordedAsRejected) {
+    Tape tape;
+    tape.rec(10, 'A', 'B', P - CENT, 10, 1).rec(10, 'A', 'A', P + CENT, 10, 2).rec(5'000, 'N', 'N', 0, 0, 0);
+    uint64_t id = 0;
+    const Simulator sim = runWith(tape, config(1'000), 0, [&](Simulator& s) {
+        id = s.rejectNonIntegerQuantity(OrderSide::BUY, P + CENT, 4);
+    });
+    EXPECT_EQ(order(sim, id).status, StrategyOrderStatus::REJECTED);
+    EXPECT_STREQ(order(sim, id).reject_reason, "QUANTITY_NOT_INTEGER");
+    EXPECT_EQ(sim.position(), 0);
+    EXPECT_EQ(sim.getStats().orders_rejected, 1u);
+    EXPECT_TRUE(sim.liveOrderIds().empty());
+}
+
 TEST(Simulator, ValidatorRunsOnTheSimulator) {
     Tape tape;
     tape.rec(10, 'A', 'B', P, 10, 1).rec(20, 'A', 'A', P + CENT, 4, 2).exec(30, 'B', 'A', P + CENT, 4, 2);

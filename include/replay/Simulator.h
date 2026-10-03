@@ -184,6 +184,11 @@ class Simulator {
         // configured latency; until then its status is PENDING.
         // A limit order: whatever does not trade on arrival rests until filled or cancelled.
         uint64_t submit(OrderSide side, int price, int quantity);
+        // Records an order the strategy's gateway refused outright because its
+        // quantity was not a whole number of shares (only the Python API can send
+        // one); `quantity` is what to show for it. Returns its client id; the
+        // order is REJECTED with QUANTITY_NOT_INTEGER.
+        uint64_t rejectNonIntegerQuantity(OrderSide side, int price, int quantity);
         // Requests a cancel; it also travels with the latency. Returns false if
         // the order is unknown or already done.
         bool cancel(uint64_t client_id);
@@ -195,7 +200,8 @@ class Simulator {
         int64_t position() const { return pos; }
         int64_t cashTicks() const { return cash; }
         double fees() const { return fee_total; }
-        // cash + position at mid, minus fees, in dollars. Needs both sides of the book.
+        // cash + position at the current mid (the last known one while a side is
+        // empty), minus fees, in dollars.
         double markToMarket() const;
         const std::vector<StrategyFill>& fills() const { return fill_log; }
         const std::unordered_map<uint64_t, StrategyOrder>& orders() const { return strategy_orders; }
@@ -264,6 +270,8 @@ class Simulator {
         void venueClear();
 
         // strategy
+        // Stores a new PENDING order with the next client id and counts it as submitted.
+        StrategyOrder& newOrder(OrderSide side, int price, int quantity);
         void arrive(const Action& action);
         void arriveSubmit(StrategyOrder& order);
         void arriveCancel(StrategyOrder& order);
