@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "matching-engine"
 version = "0.1.0"                # keep in step with project(VERSION) in CMakeLists.txt
-description = "Python bindings for a single-symbol C++ matching engine"
+description = "Strategy backtester on a single-symbol C++ order book"
 requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: C++",

@@ -31,9 +31,6 @@ target_compile_features(_core PRIVATE cxx_std_20)
 target_link_libraries(_core PRIVATE
     me_core
     me_replay           # market data replay and validation
-    me_ds_lock          # LockQueue
-    me_event_handler    # Logger
-    Threads::Threads
 )
 
 # scikit-build-core assembles the wheel from the install tree, so the extension
