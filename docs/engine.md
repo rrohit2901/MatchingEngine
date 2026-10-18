@@ -1,7 +1,7 @@
 # The matching engine
 
 The C++20 core under the backtester: a single-symbol limit order book with price-time
-priority, pre-trade risk checks, an off-hot-path event log, and Python bindings.
+priority, pre-trade risk checks and an off-hot-path event log.
 - The backtester drives it through `OrderBook` directly: see
   [`strategy-replay-plan.md`](strategy-replay-plan.md) and `include/replay/`.
 - `MatchingEngine` (risk checks, matching, event publishing) is the standalone engine
@@ -39,7 +39,7 @@ be a lock-free SPSC ring rather than a general-purpose queue.
 | `RiskManager` | pre-trade fat-finger checks |
 | `EventVariant` | the event itself — a trivially copyable `std::variant` carried by value |
 | `RingBuffer<T, N>` | bounded lock-free SPSC ring; the engine/logger handoff |
-| `LockQueue<T>` | two-mutex queue; still used by the tests and the Python binding |
+| `LockQueue<T>` | two-mutex queue; still used by the tests |
 | `Logger` | drains the queue on its own thread |
 
 ## Performance
@@ -211,13 +211,6 @@ that was actually removed. Ordering in the log comes from the queue — FIFO, si
 — not from comparing timestamps, so the stamp only has to say roughly when something
 happened.
 
-**The Python binding owns the wiring.** `MatchingEngine`'s constructor takes an event queue
-that nothing drains unless a `Logger` runs alongside it, and the engine must be destroyed
-*before* the logger is stopped or the final `SESSION_CLOSE` never reaches the file. Rather
-than expose that to Python, the binding wraps queue, logger, thread and engine in an RAII
-facade, and handles GIL release around the thread join, fork safety, and interpreter-teardown
-cleanup.
-
 ## Building and using it directly
 
 ### C++
@@ -234,32 +227,6 @@ Benchmarks:
 ```bash
 taskset -c 2,3 ./build/bench/bench_latency 300000   # two cores: it is producer + consumer
 ./build/bench/bench_add --benchmark_min_time=0.5s
-```
-
-### Python
-
-```bash
-pip install .
-```
-
-```python
-from matching_engine import MatchingEngine, OrderSide, RiskParams
-
-with MatchingEngine("logs/session.log", RiskParams(max_allowed_quantity_quote=50_000)) as engine:
-    buy = engine.add_order(price=1005, quantity=10, side=OrderSide.BUY)
-    engine.add_order(price=1005, quantity=10, side=OrderSide.SELL)   # crosses, trades
-
-    bids, asks = engine.book(num_levels=5)
-
-    rejected = engine.add_order(price=1005, quantity=0, side=OrderSide.BUY)
-    assert rejected is None      # risk rejected; the reason is in the log
-```
-
-The engine owns a logger thread, so use it as a context manager or call `close()`. The log
-file is complete only once `close()` returns.
-
-```bash
-pip install '.[test]' && pytest tests/python
 ```
 
 Build options. A plain configure builds everything except the Python extension, with LTO and

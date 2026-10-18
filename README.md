@@ -149,7 +149,7 @@ Your orders live in the same book as the real ones. How they fill:
 
 ### 6. The matching engine
 The C++20 core: a single-symbol limit order book with price-time priority, pre-trade
-risk checks, a lock-free event log off the hot path, and Python bindings.
+risk checks and a lock-free event log off the hot path.
 
 | operation (P50 / P99, 300k samples) | latency |
 |---|---:|
